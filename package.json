@@ -1,0 +1,14 @@
+{
+  "name": "guild-bot",
+  "version": "0.1.0",
+  "description": "길드 전용 디스코드 봇",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "node src/deploy-commands.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
