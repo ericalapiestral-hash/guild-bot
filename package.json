@@ -7,6 +7,9 @@
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5"
