@@ -1,33 +1,78 @@
 # 길드봇
 
-길드 전용 디스코드 봇. 기능은 하나씩 추가 예정.
+낭만주의 길드 전용 디스코드 봇.
 
-## 현재 기능
+## 기능
 
-**입장 자동역할** — 새로 들어오는 멤버에게 설정해둔 역할을 자동으로 부여 (봇 계정은 제외)
+**입장 자동역할** — 새로 들어오는 멤버에게 설정해둔 역할을 자동 부여 (봇 계정은 제외)
+
+**빌드 도감** — 노션 "PVE 빌드 도감"을 읽어 슬래시 명령으로 검색. 자동완성으로 빌드 이름을 골라도 되고, 초성(`ㅍㅇㅅㅇ`)이나 띄어쓰기 없이(`파이세인4턴`) 쳐도 찾아준다.
+
+**통계** — 길드 사이트 통계 API를 순위표 임베드로 표시
 
 | 명령어 | 설명 | 필요 권한 |
 |---|---|---|
-| `/자동역할 설정 역할` | 자동으로 부여할 역할 지정 | 역할 관리 |
-| `/자동역할 해제` | 자동 부여 끄기 | 역할 관리 |
-| `/자동역할 확인` | 현재 설정 확인 | 역할 관리 |
+| `/파괴신 빌드:파이 세인 4턴` | 파괴신 빌드 찾기 | — |
+| `/공성전 요일:수 빌드:…` | 공성전 빌드 찾기 (요일로 먼저 걸러내기 가능) | — |
+| `/통계 공성전 [요일] [주차]` | 공성전 순위표 | — |
+| `/통계 파괴신 [시즌]` | 파괴신 순위표 | — |
+| `/빌드갱신` | 노션 도감을 다시 읽어오기 | 서버 관리 |
+| `/자동역할 설정\|해제\|확인` | 입장 자동역할 관리 | 역할 관리 |
 
-## 처음 설정 (1회)
+## 설정
 
-1. [디스코드 개발자 포털](https://discord.com/developers/applications)에서 애플리케이션 생성
-2. **Bot** 탭 → 토큰 발급(Reset Token), **Server Members Intent** 켜기
-3. **OAuth2 → URL Generator** → `bot` + `applications.commands` 체크, Bot Permissions에서 `Manage Roles` 체크 → 생성된 URL로 봇을 서버에 초대
-4. `.env.example`을 복사해 `.env` 만들고 토큰/ID 채우기
-5. 서버 설정 → 역할에서 **봇 역할을 부여할 역할들보다 위로** 올리기
+`.env.example`을 복사해 `.env`를 만들고 값을 채운다.
 
 ```
 npm install
-npm run deploy   # 슬래시 명령어 등록 (명령어 추가/수정 시마다 실행)
-npm start        # 봇 실행
+npm start        # 봇 실행 (슬래시 명령은 시작할 때 자동 등록됨)
 ```
 
-## 기능 추가 방법
+### 디스코드
 
-- **명령어**: `src/commands/`에 `data`(SlashCommandBuilder)와 `execute`를 내보내는 `.js` 파일 추가 → `npm run deploy` 한 번 실행
-- **이벤트**: `src/events/`에 `name`(Events.~)과 `execute`를 내보내는 `.js` 파일 추가 (재시작만 하면 됨)
-- 설정 저장은 `src/store.js`의 `get`/`set` 사용 (`config.json`에 저장됨)
+1. [개발자 포털](https://discord.com/developers/applications) → **Bot** 탭에서 토큰 발급, **Server Members Intent** 켜기
+2. **OAuth2 → URL Generator** → `bot` + `applications.commands`, 권한은 `Manage Roles` → 생성된 URL로 초대
+3. 서버 설정 → 역할에서 **봇 역할을 부여할 역할들보다 위로** 올리기
+
+### 노션 도감 연동
+
+1. [app.notion.com/developers/connections](https://app.notion.com/developers/connections) → **내부 연결(Internal)** 생성 → 토큰(`ntn_…`) 복사 → `.env`의 `NOTION_TOKEN`에 넣기
+2. **도감 페이지에서 `•••` → 연결(Connections) → 만든 연결 추가**
+   이 단계를 빠뜨리면 토큰이 맞아도 404가 난다. 부모 페이지에 추가하면 하위 페이지까지 상속된다.
+3. `npm run notion:dump`로 잘 읽히는지 확인 — 인식된 빌드 목록이 출력된다
+
+봇은 시작할 때 한 번, 이후 30분마다 도감을 다시 읽는다. 노션을 고치고 바로 반영하고 싶으면 `/빌드갱신`.
+
+읽어온 결과는 `data/builds.json`에 캐시되어, 노션이 막히거나 토큰이 없어도 마지막으로 읽은 내용으로 계속 답한다.
+
+#### 도감 페이지 구조
+
+빌드는 **헤딩(제목)** 기준으로 잘린다. 헤딩 경로 어딘가에 `공성전` 또는 `파괴신`이 들어 있어야 그 카테고리로 분류된다. 빌드마다 하위 페이지를 쓰든, 한 페이지 안에서 헤딩으로 나누든 똑같이 동작한다.
+
+```
+# 공성전
+## 수요일
+### 파이 세인 3턴     ← 빌드 (공성전 · 수요일)
+# 파괴신
+## 파이 세인 4턴       ← 빌드 (파괴신)
+```
+
+## 개발
+
+```
+npm test              # 파서·검색 자체 점검
+npm run notion:dump   # 노션에서 읽은 원본을 data/notion-dump.md로 저장
+npm run deploy        # 슬래시 명령 수동 등록 (보통 필요 없음 — 시작 시 자동)
+```
+
+기능 추가는 파일만 놓으면 자동 로드된다.
+
+- **명령어**: `src/commands/`에 `data`(SlashCommandBuilder) + `execute` 내보내기. 자동완성을 쓰면 `autocomplete`도 함께.
+- **이벤트**: `src/events/`에 `name`(Events.~) + `execute` 내보내기
+- **설정 저장**: `src/store.js`의 `get`/`set` (`config.json`에 저장)
+
+## 호스팅
+
+[디스호스트](https://dishost.kr/) 무료 플랜에서 24시간 구동. Git URL(`https://github.com/ericalapiestral-hash/guild-bot.git`)로 배포하고, 환경변수는 패널에서 설정한다.
+
+> ⚠️ **7일마다 대시보드에서 연장 버튼**을 눌러야 인스턴스가 유지된다.

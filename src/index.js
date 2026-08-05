@@ -31,6 +31,19 @@ for (const file of fs.readdirSync(eventsPath).filter((f) => f.endsWith('.js'))) 
 }
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  // 자동완성은 별도 인터랙션 타입 — 3초 안에 respond()로만 답할 수 있고 오류 메시지를 보낼 수 없다.
+  if (interaction.isAutocomplete()) {
+    const command = client.commands.get(interaction.commandName);
+    if (!command || !command.autocomplete) return;
+    try {
+      await command.autocomplete(interaction);
+    } catch (error) {
+      console.error(`[오류] /${interaction.commandName} 자동완성:`, error);
+      await interaction.respond([]).catch(() => {});
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);

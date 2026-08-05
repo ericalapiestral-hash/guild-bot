@@ -5,7 +5,9 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "deploy": "node src/deploy-commands.js"
+    "deploy": "node src/deploy-commands.js",
+    "notion:dump": "node src/dump-notion.js",
+    "test": "node test/builds.test.js && node test/notion.test.js"
   },
   "engines": {
     "node": ">=18"
