@@ -15,7 +15,12 @@ const MIN_INTERVAL_MS = 350;
 
 /** 폭주 방지 상한 */
 const MAX_PAGES = 300;
+const MAX_PAGE_DEPTH = 8;
 const MAX_HEADING_LEVEL = 6;
+/** 128MB 호스팅에서 OOM으로 죽는 대신 잡히는 오류로 만들기 위한 상한 */
+const MAX_MARKDOWN_CHARS = 4_000_000;
+/** 서버가 이상 응답을 줘도 페이지네이션이 끝나도록 */
+const MAX_PAGINATION_ROUNDS = 200;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -30,11 +35,12 @@ async function throttle() {
 
 /**
  * 노션 URL이나 ID 문자열에서 32자리 페이지 ID를 뽑아 대시 형식으로 정규화한다.
- * URL의 다른 글자(brand-inq 등)를 16진수로 오인하지 않도록 "정확히 32자리" 패턴만 찾는다.
+ * 앞뒤 경계를 강제해서, 주소 슬러그가 16진수 글자로 끝나도(예: /PVE-20240101-<진짜ID>)
+ * 슬러그와 ID가 뒤섞인 엉뚱한 값이 나오지 않게 한다.
  */
 function normalizePageId(raw) {
   const m = String(raw ?? '').match(
-    /[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}/i,
+    /(?<![0-9a-f])(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})(?![0-9a-f])/i,
   );
   if (!m) return null;
   const hex = m[0].replace(/-/g, '').toLowerCase();
@@ -50,8 +56,8 @@ function explain(status, body) {
   }
   if (status === 404 || code === 'object_not_found') {
     return (
-      '노션 페이지를 찾을 수 없어요. 도감 페이지에서 ••• → 연결(Connections)로 봇 연결을 추가했는지 확인해주세요. ' +
-      '(연결을 추가하지 않으면 토큰이 맞아도 404가 납니다)'
+      '노션 페이지를 찾을 수 없어요. 도감 페이지에서 ••• → 연결(Connections)로 봇 연결을 추가했는지, ' +
+      'NOTION_PAGE_ID가 맞는지 확인해주세요.'
     );
   }
   if (status === 403) {
@@ -72,8 +78,9 @@ async function request(pathname, { searchParams, timeoutMs = 15_000, attempts = 
     );
   }
 
-  const qs = searchParams && searchParams.size ? `?${searchParams}` : '';
-  const url = `${API_BASE}${pathname}${qs}`;
+  // URLSearchParams.size는 Node 18.16 미만에 없다 — 문자열로 판단한다.
+  const qsRaw = searchParams ? String(searchParams) : '';
+  const url = `${API_BASE}${pathname}${qsRaw ? `?${qsRaw}` : ''}`;
   let lastError = null;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -116,8 +123,26 @@ async function request(pathname, { searchParams, timeoutMs = 15_000, attempts = 
       throw lastError;
     }
 
-    const body = await response.json().catch(() => null);
+    let body = null;
+    let parseFailed = false;
+    try {
+      body = await response.json();
+    } catch {
+      parseFailed = true;
+    }
+
     if (!response.ok) throw new Error(explain(response.status, body));
+
+    // 200인데 본문을 못 읽은 경우 — null을 성공값으로 흘려보내면 호출부가 TypeError로 터진다.
+    if (parseFailed || body === null || typeof body !== 'object') {
+      lastError = new Error('노션 응답을 해석하지 못했어요.');
+      if (attempt < attempts - 1) {
+        await sleep(Math.min(2 ** attempt, 8) * 1000);
+        continue;
+      }
+      throw lastError;
+    }
+
     return body;
   }
 
@@ -128,13 +153,18 @@ async function request(pathname, { searchParams, timeoutMs = 15_000, attempts = 
 async function fetchChildren(blockId) {
   const out = [];
   let cursor = null;
-  do {
+  for (let round = 0; round < MAX_PAGINATION_ROUNDS; round += 1) {
     const params = new URLSearchParams({ page_size: '100' });
     if (cursor) params.set('start_cursor', cursor);
     const body = await request(`/blocks/${blockId}/children`, { searchParams: params });
     if (Array.isArray(body.results)) out.push(...body.results);
-    cursor = body.has_more && body.next_cursor ? body.next_cursor : null;
-  } while (cursor);
+
+    const next = body.has_more ? body.next_cursor : null;
+    // 커서가 그대로면 서버가 이상 응답을 준 것 — 무한 루프를 막는다.
+    if (!next || next === cursor) return out;
+    cursor = next;
+  }
+  console.warn(`[노션] 블록 ${blockId}의 페이지네이션이 너무 길어 중단했어요.`);
   return out;
 }
 
@@ -180,6 +210,15 @@ function fileUrl(node) {
 /** 헤딩 줄은 들여쓰기를 붙이면 안 된다 (파서가 못 알아본다) */
 const isHeadingLine = (line) => /^#{1,6}\s/.test(line);
 
+function countChars(ctx, text) {
+  ctx.chars += text.length;
+  if (ctx.chars > MAX_MARKDOWN_CHARS) {
+    throw new Error(
+      `도감이 너무 커요 (${Math.round(MAX_MARKDOWN_CHARS / 10000) / 100}MB 초과). 페이지를 나누거나 이미지를 줄여주세요.`,
+    );
+  }
+}
+
 /**
  * 하위 페이지 하나를 현재 위치에 펼쳐 넣는다.
  * @returns {Promise<string|null>} 제목 헤딩 + 본문 마크다운
@@ -188,8 +227,8 @@ async function inlinePage(pageId, title, titleLevel, ctx) {
   const id = normalizePageId(pageId);
   if (!id || ctx.seen.has(id)) return null;
   if (ctx.pageCount >= MAX_PAGES) {
-    if (!ctx.warnedLimit) {
-      ctx.warnedLimit = true;
+    if (!ctx.warnedPages) {
+      ctx.warnedPages = true;
       console.warn(`[노션] 페이지가 ${MAX_PAGES}개를 넘어 나머지는 건너뛰었어요.`);
     }
     return null;
@@ -197,28 +236,45 @@ async function inlinePage(pageId, title, titleLevel, ctx) {
   ctx.seen.add(id);
   ctx.pageCount += 1;
 
+  // 헤딩은 6단계까지만 있지만, 페이지 중첩은 그것과 별개로 더 깊이 따라간다.
+  const level = Math.min(MAX_HEADING_LEVEL, Math.max(1, titleLevel));
+
   try {
     const name = title || pageTitle(await request(`/pages/${id}`));
-    const heading = `${'#'.repeat(Math.min(MAX_HEADING_LEVEL, Math.max(1, titleLevel)))} ${name}`;
-    if (titleLevel >= MAX_HEADING_LEVEL) return heading; // 더 깊이는 안 들어간다
-    const children = await fetchChildren(id);
-    const body = await renderBlocks(children, ctx, { headingLevel: titleLevel });
-    return body ? `${heading}\n${body}` : heading;
+    const heading = `${'#'.repeat(level)} ${name}`;
+
+    if (ctx.depth >= MAX_PAGE_DEPTH) {
+      console.warn(`[노션] 페이지 중첩이 ${MAX_PAGE_DEPTH}단계를 넘어 "${name}" 내용은 건너뛰었어요.`);
+      return heading;
+    }
+
+    ctx.depth += 1;
+    try {
+      const children = await fetchChildren(id);
+      const { text } = await renderBlocks(children, ctx, { headingLevel: titleLevel });
+      return text ? `${heading}\n${text}` : heading;
+    } finally {
+      ctx.depth -= 1;
+    }
   } catch (e) {
+    if (/도감이 너무 커요/.test(e.message)) throw e;
     console.warn(`[노션] 하위 페이지 읽기 실패 (${title || id}): ${e.message}`);
     return null;
   }
 }
 
 /**
- * 블록 목록을 마크다운 줄로 바꾼다.
- * @param {object} opts.headingLevel 이 페이지가 몇 단계 안쪽인지 (루트 0). 헤딩 레벨을 이만큼 민다.
+ * 블록 목록을 마크다운으로 바꾼다.
+ * @param {number} opts.headingLevel 이 페이지가 몇 단계 안쪽인지 (루트 0). 헤딩 레벨을 이만큼 민다.
+ * @param {number} [opts.startHeadingLevel] 이 블록 목록 직전에 나온 헤딩의 레벨.
+ *   토글·컬럼 안으로 재귀할 때 바깥 헤딩 문맥을 잃지 않으려고 넘긴다.
+ * @returns {Promise<{text: string, lastHeadingLevel: number}>}
  */
-async function renderBlocks(blocks, ctx, { headingLevel, indent = '' }) {
+async function renderBlocks(blocks, ctx, { headingLevel, indent = '', startHeadingLevel }) {
   const lines = [];
   let numbering = 0;
   // 하위 페이지 제목을 어느 깊이에 놓을지 정하려고 직전 헤딩 레벨을 기억해둔다.
-  let lastHeadingLevel = headingLevel;
+  let lastHeadingLevel = startHeadingLevel ?? headingLevel;
 
   for (const block of blocks) {
     const type = block.type;
@@ -305,10 +361,15 @@ async function renderBlocks(blocks, ctx, { headingLevel, indent = '' }) {
       case 'table': {
         renderChildren = false;
         const rows = block.has_children ? await fetchChildren(block.id) : [];
+        // 각 행을 '| '로 시작시킨다 — 첫 칸이 '#'인 표(번호 열)가 헤딩으로 오인되면
+        // 그 뒤 문서 구조가 통째로 무너지기 때문이다.
         line = rows
           .filter((r) => r.type === 'table_row')
-          .map((r) =>
-            (r.table_row.cells || []).map((cell) => richText(cell).trim() || '-').join(' | '),
+          .map(
+            (r) =>
+              `| ${(r.table_row.cells || [])
+                .map((cell) => richText(cell).trim() || '-')
+                .join(' | ')}`,
           )
           .join('\n');
         break;
@@ -356,26 +417,32 @@ async function renderBlocks(blocks, ctx, { headingLevel, indent = '' }) {
 
     if (line) {
       const useIndent = indent && !noIndent;
-      lines.push(
-        useIndent
-          ? line
-              .split('\n')
-              .map((l) => (isHeadingLine(l) ? l : indent + l))
-              .join('\n')
-          : line,
-      );
+      const rendered = useIndent
+        ? line
+            .split('\n')
+            .map((l) => (isHeadingLine(l) ? l : indent + l))
+            .join('\n')
+        : line;
+      countChars(ctx, rendered);
+      lines.push(rendered);
     }
 
     if (renderChildren && block.has_children) {
       const isContainer = type === 'column_list' || type === 'column' || type === 'synced_block';
       const childIndent = isContainer || !line ? indent : `${indent}  `;
       const children = await fetchChildren(block.id);
-      const sub = await renderBlocks(children, ctx, { headingLevel, indent: childIndent });
-      if (sub) lines.push(sub);
+      const sub = await renderBlocks(children, ctx, {
+        headingLevel,
+        indent: childIndent,
+        startHeadingLevel: lastHeadingLevel,
+      });
+      if (sub.text) lines.push(sub.text);
+      // 컨테이너 안의 헤딩도 바깥 형제들의 문맥이 된다.
+      lastHeadingLevel = sub.lastHeadingLevel;
     }
   }
 
-  return lines.join('\n');
+  return { text: lines.join('\n'), lastHeadingLevel };
 }
 
 /**
@@ -389,14 +456,14 @@ async function fetchDocument(rawPageId) {
   }
 
   const rootPage = await request(`/pages/${rootId}`);
-  const ctx = { seen: new Set([rootId]), pageCount: 1, warnedLimit: false };
+  const ctx = { seen: new Set([rootId]), pageCount: 1, depth: 0, chars: 0, warnedPages: false };
 
   const rootBlocks = await fetchChildren(rootId);
-  const markdown = await renderBlocks(rootBlocks, ctx, { headingLevel: 0 });
+  const { text } = await renderBlocks(rootBlocks, ctx, { headingLevel: 0 });
 
   return {
     title: pageTitle(rootPage),
-    markdown,
+    markdown: text,
     pageCount: ctx.pageCount,
     pageUrl: (rootPage && rootPage.url) || `https://www.notion.so/${rootId.replace(/-/g, '')}`,
   };

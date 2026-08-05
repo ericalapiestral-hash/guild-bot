@@ -30,7 +30,8 @@ const { buildsFromMarkdown } = require('./builds');
       const list = found.filter((b) => b.category === category);
       console.log(`\n[${category}] ${list.length}개`);
       for (const b of list.slice(0, 40)) {
-        console.log(`  - ${b.label}${b.weekday ? ` (${b.weekday}요일)` : ''} · ${b.body.length}자`);
+        const days = b.weekdays && b.weekdays.length ? ` (${b.weekdays.join('·')}요일)` : '';
+        console.log(`  - ${b.label}${days} · 본문 ${b.body.length}자`);
       }
       if (list.length > 40) console.log(`  … 외 ${list.length - 40}개`);
     }
