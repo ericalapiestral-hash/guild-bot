@@ -232,6 +232,30 @@ test('띄어쓰기를 무시하고 찾는다', () => {
   assert.ok(score(dest4, '파이세인4턴') > 0);
 });
 
+test('이름 중간에 다른 말이 끼어 있어도 붙여쓰기로 찾는다', () => {
+  // 실제 도감 이름: "파이 세인 빌드 확정 or 확률적 4턴"
+  const parsed = buildsFromMarkdown(`
+# 파괴신
+## 파이 세인 빌드 확정 or 확률적 4턴
+내용 A
+## 파이 세인 빌드 확정 8턴
+내용 B
+## 백룡 파이 빌드 4턴 / 8턴
+내용 C
+`);
+  const ranked = parsed
+    .map((b) => ({ b, s: score(b, '파이세인4턴') }))
+    .filter((x) => x.s > 0)
+    .sort((x, y) => y.s - x.s);
+  assert.ok(ranked.length > 0, '붙여쓰기 검색이 아무것도 못 찾음');
+  assert.strictEqual(ranked[0].b.name, '파이 세인 빌드 확정 or 확률적 4턴');
+});
+
+test('짧은 검색어에는 순서매칭을 쓰지 않는다', () => {
+  // 3글자 이하까지 순서매칭을 하면 아무 빌드나 걸린다
+  assert.strictEqual(score(dest5, '파이4'), 0);
+});
+
 test('토큰이 하나라도 없으면 제외한다', () => {
   assert.strictEqual(score(dest4, '파이 없는단어'), 0);
 });

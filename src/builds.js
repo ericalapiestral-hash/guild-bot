@@ -1,14 +1,19 @@
-// 노션 도감 마크다운 → 빌드 목록으로 쪼개고, 한글 검색으로 찾아준다.
-// 결과는 data/builds.json에 캐시해서 노션이 막히거나 토큰이 없어도 봇이 계속 답하게 한다.
+// 노션 도감을 읽어 빌드 목록으로 만들고, 한글 검색으로 찾아준다.
+//
+// 도감은 데이터베이스 구조다: PVE 구분(DB) → 공성전 리스트(DB) → 빌드 행.
+// 그래서 데이터베이스를 훑는 경로가 기본이고, 헤딩으로만 된 페이지를 대비해
+// 마크다운 헤딩 파서를 예비 경로로 함께 둔다.
+//
+// 결과는 data/builds.json에 캐시해서 노션이 잠깐 막혀도 봇이 계속 답하게 한다.
 'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { fetchDocument } = require('./notion');
+const { fetchCatalog, fetchDocument } = require('./notion');
 
 const CACHE_PATH = path.join(__dirname, '..', 'data', 'builds.json');
 
-/** 카테고리 판별에 쓰는 키워드 (헤딩 경로에서 찾는다) */
+/** 카테고리 판별에 쓰는 키워드 (묶음 이름·헤딩 경로에서 찾는다) */
 const CATEGORY_KEYWORDS = {
   파괴신: ['파괴신', '파신'],
   공성전: ['공성전', '공성'],
@@ -55,6 +60,16 @@ function isChosungOnly(s) {
   return /^[ㄱ-ㅎ]+$/.test(s);
 }
 
+/** 글자가 순서대로만 나오면 매치 — "파이세인4턴"으로 "파이 세인 빌드 확정 4턴"을 찾게 해준다 */
+const SUBSEQ_MIN = 4;
+function isSubsequence(needle, hay) {
+  let i = 0;
+  for (let j = 0; j < hay.length && i < needle.length; j += 1) {
+    if (hay[j] === needle[i]) i += 1;
+  }
+  return i === needle.length;
+}
+
 /** 자동완성 값으로 쓸 짧고 안정적인 키 (FNV-1a) */
 function shortHash(text) {
   let h = 0x811c9dc5;
@@ -65,9 +80,9 @@ function shortHash(text) {
   return h.toString(36);
 }
 
-// ─────────────────────────────── 마크다운 → 빌드 목록
+// ─────────────────────────────── 마크다운 다듬기
 
-/** 마크다운 이미지의 첫 URL. 캡션에 대괄호·링크가 들어가도 마지막 ]( 를 기준으로 잡는다. */
+/** 마크다운 이미지. 캡션에 대괄호·링크가 들어가도 마지막 ]( 를 기준으로 잡는다. */
 const IMAGE_RE = /[ \t]*!\[(.*)\]\((https?:\/\/[^)\s]+)\)[ \t]*/;
 
 function firstImage(text) {
@@ -83,45 +98,50 @@ function stripImages(text) {
     .replace(/\n{3,}/g, '\n\n');
 }
 
+// ─────────────────────────────── 분류
+
 /**
- * 헤딩 경로에서 카테고리를 고른다. **얕은(조상) 쪽이 우선**이다.
- * 빌드 이름에 다른 모드 이름이 들어가도(예: 공성전 > "파괴신 카운터 조합")
- * 조상이 정한 카테고리가 뒤집히지 않게 한다.
+ * 이름이 카테고리 그 자체인지 판단한다.
+ * "공성전", "공성전 도감", "🏰 공성전"은 참 — 라벨에서 빼도 정보가 안 사라진다.
+ * "강림 - 파괴신", "공성전 1주차"는 거짓 — 빼면 다른 묶음과 구분이 안 된다.
+ */
+function isPureCategoryLabel(text, keywords) {
+  let rest = norm(text);
+  for (const k of keywords) rest = rest.split(norm(k)).join('');
+  rest = rest.replace(/도감|빌드|모음|목록|정리|공략|리스트|구분/g, '');
+  return !/[\p{L}\p{N}]/u.test(rest);
+}
+
+/**
+ * 경로에서 카테고리를 고른다. **얕은(상위) 쪽이 우선**이다.
+ * 빌드 이름에 다른 모드 이름이 들어가도(공성전 묶음의 "파괴신 카운터 조합")
+ * 상위가 정한 카테고리가 뒤집히지 않게 한다.
  * @returns {{category: string, index: number}|null}
  */
 function detectCategory(parts) {
   for (let i = 0; i < parts.length; i += 1) {
     for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-      if (keywords.some((k) => parts[i].includes(k))) return { category, index: i };
+      if (keywords.some((k) => String(parts[i]).includes(k))) return { category, index: i };
     }
   }
   return null;
 }
 
 /**
- * 그 헤딩이 카테고리 이름 그 자체인지 판단한다.
- * "공성전", "공성전 도감", "🏰 공성전"은 참 — 라벨에서 빼도 정보가 안 사라진다.
- * "공성전 2026년 9월 1주차"는 거짓 — 빼버리면 주차가 다른 동명 빌드와 구분이 안 된다.
- */
-function isPureCategoryLabel(text, keywords) {
-  let rest = norm(text);
-  for (const k of keywords) rest = rest.split(norm(k)).join('');
-  rest = rest.replace(/도감|빌드|모음|목록|정리|공략/g, '');
-  return !/[\p{L}\p{N}]/u.test(rest);
-}
-
-/**
- * 헤딩 경로에서 요일을 모두 찾는다.
- * "수요일", "월·목요일", "월, 목요일", "월~수요일", 그리고 "수" 단독을 모두 인식한다.
+ * 경로에서 요일을 모두 찾는다.
+ * "수요일", "월·목요일", "월, 목요일", "월~수요일", "월요일 - 루디 / 쥬리", 단독 "수"를 인식한다.
  */
 function detectWeekdays(parts) {
   for (let i = parts.length - 1; i >= 0; i -= 1) {
     const part = String(parts[i]);
-    const looksLikeWeekday = /[월화수목금토일]\s*요일/.test(part) || /^\s*[월화수목금토일]\s*$/.test(part);
-    if (!looksLikeWeekday) continue;
 
-    // "요일"을 떼어내야 '일'이 잘못 잡히지 않는다 ("월요일" → "월")
-    const cleaned = part.replace(/요일/g, '');
+    // "월요일 - 루디 / 쥬리, 나타 딜러"처럼 뒤에 조합 이름이 붙어도 요일 부분만 본다.
+    // (뒤까지 훑으면 캐릭터 이름 속 '일'·'수' 같은 글자를 요일로 잘못 읽는다)
+    const last = part.lastIndexOf('요일');
+    let cleaned;
+    if (last >= 0) cleaned = part.slice(0, last).replace(/요일/g, '');
+    else if (/^\s*[월화수목금토일]\s*$/.test(part)) cleaned = part.trim();
+    else continue;
 
     const range = cleaned.match(/([월화수목금토일])\s*[~\-–—]\s*([월화수목금토일])/);
     if (range) {
@@ -143,9 +163,90 @@ function detectWeekdays(parts) {
   return [];
 }
 
+/** 카테고리 이름만 걷어낸 표시·검색용 문자열 (빌드 이름은 항상 남긴다) */
+function labelFrom(parts, found) {
+  const dropIndex =
+    found &&
+    found.index !== parts.length - 1 &&
+    isPureCategoryLabel(parts[found.index], CATEGORY_KEYWORDS[found.category])
+      ? found.index
+      : -1;
+  return parts.filter((_, idx) => idx !== dropIndex).join(' › ');
+}
+
+/**
+ * 한 카테고리의 빌드가 전부 같은 묶음에 있으면 라벨에서 묶음 이름을 뗀다.
+ * (파괴신 빌드가 전부 "강림 - 파괴신" 안에 있으면 자동완성마다 그 접두사를 보일 이유가 없다)
+ */
+function simplifyLabels(list) {
+  const groupsPerCategory = new Map();
+  for (const b of list) {
+    if (!b.category) continue;
+    if (!groupsPerCategory.has(b.category)) groupsPerCategory.set(b.category, new Set());
+    groupsPerCategory.get(b.category).add(b.group);
+  }
+  for (const b of list) {
+    if (!b.category) continue;
+    if (groupsPerCategory.get(b.category).size === 1) b.label = b.name;
+  }
+}
+
+/** 자동완성 값으로 쓸 짧고 유일한 키를 붙인다 */
+function assignIds(list) {
+  const used = new Set();
+  for (const b of list) {
+    let bump = 0;
+    let id = '#' + shortHash(String(b.category) + ' ' + b.label);
+    while (used.has(id)) {
+      bump += 1;
+      id = '#' + shortHash(String(b.category) + ' ' + b.label + ' ' + bump);
+    }
+    used.add(id);
+    b.id = id;
+  }
+}
+
+// ─────────────────────────────── 데이터베이스 경로 (기본)
+
+/**
+ * 노션 데이터베이스에서 읽어온 목록 → 빌드 목록.
+ * 도감이 "PVE 구분 → 공성전 리스트 → 빌드"처럼 데이터베이스로 되어 있을 때 쓴다.
+ */
+function buildsFromCatalog(catalog) {
+  const out = [];
+
+  for (const raw of (catalog && catalog.builds) || []) {
+    const markdown = String(raw.markdown || '');
+    const body = stripImages(markdown).trim();
+    if (!body) continue;
+
+    const groupPath = Array.isArray(raw.groupPath) ? raw.groupPath : [];
+    const parts = [...groupPath, raw.name];
+    const found = detectCategory(parts);
+
+    out.push({
+      name: raw.name,
+      label: labelFrom(parts, found),
+      path: groupPath,
+      group: groupPath.join(' › '),
+      category: found ? found.category : null,
+      weekdays: detectWeekdays(parts),
+      image: firstImage(markdown),
+      body,
+      url: raw.url || (catalog && catalog.pageUrl) || null,
+    });
+  }
+
+  simplifyLabels(out);
+  assignIds(out);
+  return out.map(prepare);
+}
+
+// ─────────────────────────────── 헤딩 경로 (예비)
+
 /**
  * 헤딩 기준으로 마크다운을 섹션으로 쪼갠다. 각 섹션은 **자기 줄만** 갖는다.
- * (조상에 자식 본문을 복사하면 목차 헤딩이 빌드로 잡히고 메모리도 몇 배로 든다)
+ * (상위에 자식 본문을 복사하면 목차 헤딩이 빌드로 잡히고 메모리도 몇 배로 든다)
  */
 function parseSections(markdown) {
   const lines = String(markdown ?? '').split('\n');
@@ -157,7 +258,7 @@ function parseSections(markdown) {
     if (/^\s*```/.test(line)) inCodeFence = !inCodeFence;
 
     const m = inCodeFence ? null : line.match(/^(#{1,6})\s+(.+?)\s*$/);
-    // 표 행(`| 조합 | 턴수`)이 헤딩으로 오인되면 문서 구조가 통째로 무너진다.
+    // 표 행(| 조합 | 턴수)이 헤딩으로 오인되면 문서 구조가 통째로 무너진다.
     const isHeading = m && !m[2].startsWith('|') && !m[2].includes(' | ');
 
     if (isHeading) {
@@ -166,7 +267,6 @@ function parseSections(markdown) {
       while (stack.length > 0 && stack[stack.length - 1].level >= level) stack.pop();
       const parent = stack.length > 0 ? stack[stack.length - 1].index : -1;
 
-      // 경로는 부모를 타고 올라가 만든다
       const trail = [];
       for (let p = parent; p >= 0; p = sections[p].parent) trail.unshift(sections[p].name);
 
@@ -181,7 +281,7 @@ function parseSections(markdown) {
   return sections;
 }
 
-/** 섹션 목록 → 검색 가능한 빌드 목록 */
+/** 헤딩 섹션 목록 → 빌드 목록 */
 function buildsFromMarkdown(markdown, { pageUrl } = {}) {
   const sections = parseSections(markdown);
   const n = sections.length;
@@ -189,7 +289,7 @@ function buildsFromMarkdown(markdown, { pageUrl } = {}) {
   for (let i = 0; i < n; i += 1) {
     sections[i].hasChildHeading = i + 1 < n && sections[i + 1].level > sections[i].level;
     sections[i].ownBody = sections[i].ownLines.join('\n').trim();
-    sections[i].ownLines = null; // 메모리 반환
+    sections[i].ownLines = null;
   }
 
   const isBuild = new Array(n).fill(false);
@@ -197,62 +297,42 @@ function buildsFromMarkdown(markdown, { pageUrl } = {}) {
 
   for (let i = 0; i < n; i += 1) {
     const s = sections[i];
-    // 내용이 없는 헤딩은 목차·묶음 역할이다
-    if (!s.ownBody) continue;
+    if (!s.ownBody) continue; // 내용 없는 헤딩은 목차·묶음 역할
 
     const parts = [...s.path, s.name];
     const found = detectCategory(parts);
     if (!found) continue;
 
-    // 카테고리를 자기 이름으로 정했는데 하위 헤딩까지 있으면 카테고리 묶음이다 ("공성전 도감" 등)
+    // 카테고리를 자기 이름으로 정했는데 하위 헤딩까지 있으면 카테고리 묶음이다
     if (found.index === parts.length - 1 && s.hasChildHeading) continue;
-
-    // 부모가 이미 빌드면 이 섹션은 그 빌드의 세부 항목이다 ("1턴", "장비" 등)
+    // 부모가 이미 빌드면 이 섹션은 그 빌드의 세부 항목이다 (1턴, 장비 등)
     if (s.parent >= 0 && isBuild[s.parent]) continue;
 
     isBuild[i] = true;
 
-    // 본문 = 자기 줄 + 하위 세부 섹션
     const bodyParts = [s.ownBody];
     for (let j = i + 1; j < n && sections[j].level > s.level; j += 1) {
-      if (sections[j].ownBody) bodyParts.push(`**${sections[j].name}**\n${sections[j].ownBody}`);
+      if (sections[j].ownBody) {
+        bodyParts.push('**' + sections[j].name + '**\n' + sections[j].ownBody);
+      }
     }
-    const body = stripImages(bodyParts.join('\n\n')).trim();
-
-    // 표시·검색 문자열에서 "공성전" 같은 카테고리 이름만 뺀다 (명령어에 이미 있으니 군더더기).
-    // 단 "공성전 1주차"처럼 다른 정보가 붙어 있으면 남긴다 — 안 그러면 주차가 다른
-    // 동명 빌드끼리 라벨이 똑같아져서 자동완성에서 구분이 안 된다.
-    const dropCategorySegment =
-      found.index !== parts.length - 1 &&
-      isPureCategoryLabel(parts[found.index], CATEGORY_KEYWORDS[found.category]);
-    const keep = parts.filter((_, idx) => !(dropCategorySegment && idx === found.index));
-    const label = keep.join(' › ');
+    const raw = bodyParts.join('\n\n');
 
     out.push({
       name: s.name,
-      label,
+      label: labelFrom(parts, found),
       path: s.path,
+      group: s.path.join(' › '),
       category: found.category,
       weekdays: detectWeekdays(parts),
-      image: firstImage(bodyParts.join('\n\n')),
-      body,
+      image: firstImage(raw),
+      body: stripImages(raw).trim(),
       url: pageUrl || null,
     });
   }
 
-  // 자동완성 값으로 쓸 짧고 유일한 키를 붙인다
-  const used = new Set();
-  for (const b of out) {
-    let id = `#${shortHash(`${b.category} ${b.label}`)}`;
-    let bump = 0;
-    while (used.has(id)) {
-      bump += 1;
-      id = `#${shortHash(`${b.category} ${b.label} ${bump}`)}`;
-    }
-    used.add(id);
-    b.id = id;
-  }
-
+  simplifyLabels(out);
+  assignIds(out);
   return out.map(prepare);
 }
 
@@ -288,6 +368,9 @@ function score(build, query) {
     else if (build._full.includes(token)) hit = 30;
     else if (cho && build._fullCho.includes(token)) hit = 22;
     else if (build._body.includes(token)) hit = 10;
+    // 띄어쓰기를 통째로 붙여 쳤을 때 (파이세인4턴)
+    else if (token.length >= SUBSEQ_MIN && isSubsequence(token, build._name)) hit = 25;
+    else if (token.length >= SUBSEQ_MIN && isSubsequence(token, build._full)) hit = 14;
 
     if (hit === 0) return 0; // 토큰이 하나라도 어디에도 없으면 제외
     total += hit;
@@ -318,12 +401,7 @@ function readCache() {
     if (!raw || !Array.isArray(raw.builds)) return null;
     // 예전 형식이나 손상된 항목이 섞여 있어도 시작을 막지 않게 걸러낸다
     const builds = raw.builds.filter(
-      (b) =>
-        b &&
-        typeof b === 'object' &&
-        typeof b.name === 'string' &&
-        typeof b.category === 'string' &&
-        Array.isArray(b.path),
+      (b) => b && typeof b === 'object' && typeof b.name === 'string' && Array.isArray(b.path),
     );
     if (builds.length === 0) return null;
     return { ...raw, builds };
@@ -334,7 +412,7 @@ function readCache() {
 
 /** @returns {boolean} 저장 성공 여부 */
 function writeCache(payload) {
-  const tmp = `${CACHE_PATH}.tmp`;
+  const tmp = CACHE_PATH + '.tmp';
   try {
     fs.mkdirSync(path.dirname(CACHE_PATH), { recursive: true });
     // 검색용 파생 필드(_로 시작)는 저장하지 않는다 — 불러올 때 다시 만든다
@@ -362,7 +440,7 @@ function writeCache(payload) {
 function loadCache() {
   const cached = readCache();
   if (!cached) return false;
-  index.builds = cached.builds.map((b) => prepare({ weekdays: [], ...b }));
+  index.builds = cached.builds.map((b) => prepare({ weekdays: [], category: null, ...b }));
   index.title = cached.title || null;
   index.pageUrl = cached.pageUrl || null;
   index.syncedAt = cached.syncedAt || null;
@@ -376,18 +454,26 @@ async function doSync() {
   const pageId = process.env.NOTION_PAGE_ID;
   if (!pageId) throw new Error('NOTION_PAGE_ID가 설정되지 않았어요.');
 
-  const doc = await fetchDocument(pageId);
-  const builds = buildsFromMarkdown(doc.markdown, { pageUrl: doc.pageUrl });
+  // 기본: 데이터베이스 구조. 없으면 헤딩 구조로 넘어간다.
+  const catalog = await fetchCatalog(pageId);
+  let builds = catalog ? buildsFromCatalog(catalog) : [];
+  let meta = catalog;
+
+  if (builds.length === 0) {
+    const doc = await fetchDocument(pageId);
+    builds = buildsFromMarkdown(doc.markdown, { pageUrl: doc.pageUrl });
+    meta = doc;
+  }
 
   if (builds.length === 0) {
     throw new Error(
-      '도감에서 빌드를 하나도 찾지 못했어요. 헤딩(제목) 안에 "공성전"·"파괴신"이 들어있는지 확인해주세요.',
+      '도감에서 빌드를 하나도 찾지 못했어요. 노션 페이지에 봇 연결이 추가돼 있는지 확인해주세요.',
     );
   }
 
   index.builds = builds;
-  index.title = doc.title;
-  index.pageUrl = doc.pageUrl;
+  index.title = meta.title;
+  index.pageUrl = meta.pageUrl;
   index.syncedAt = new Date().toISOString();
   index.source = 'notion';
   index.error = null;
@@ -396,11 +482,11 @@ async function doSync() {
     title: index.title,
     pageUrl: index.pageUrl,
     syncedAt: index.syncedAt,
-    pageCount: doc.pageCount,
+    pageCount: meta.pageCount,
     builds,
   });
 
-  return { count: builds.length, pageCount: doc.pageCount, title: doc.title, cached };
+  return { count: builds.length, pageCount: meta.pageCount, title: meta.title, cached };
 }
 
 /**
@@ -426,7 +512,6 @@ async function init() {
   try {
     hadCache = loadCache();
   } catch (e) {
-    // 캐시가 깨졌다고 노션 동기화까지 막지 않는다
     console.warn(`[빌드] 캐시를 불러오지 못했어요: ${e.message}`);
   }
 
@@ -442,7 +527,7 @@ async function init() {
 
   try {
     const r = await sync();
-    console.log(`[빌드] 노션 동기화 완료 — 빌드 ${r.count}개 (페이지 ${r.pageCount}개)`);
+    console.log(`[빌드] 노션 동기화 완료 — 빌드 ${r.count}개`);
   } catch (e) {
     console.warn(`[빌드] 노션 동기화 실패: ${e.message}`);
     if (hadCache) console.warn(`[빌드] 캐시 ${index.builds.length}개로 계속 동작합니다.`);
@@ -477,12 +562,18 @@ function search(category, query, { weekday, limit = 25 } = {}) {
 }
 
 function status() {
+  const groups = {};
+  for (const b of index.builds) {
+    const key = b.group || '(묶음 없음)';
+    groups[key] = (groups[key] || 0) + 1;
+  }
   return {
     count: index.builds.length,
     byCategory: {
       공성전: index.builds.filter((b) => b.category === '공성전').length,
       파괴신: index.builds.filter((b) => b.category === '파괴신').length,
     },
+    groups,
     title: index.title,
     pageUrl: index.pageUrl,
     syncedAt: index.syncedAt,
@@ -498,6 +589,7 @@ module.exports = {
   findById,
   status,
   // 테스트용 노출
+  buildsFromCatalog,
   buildsFromMarkdown,
   parseSections,
   detectWeekdays,

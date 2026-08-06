@@ -4,44 +4,67 @@
 require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
-const { fetchDocument } = require('./notion');
-const { buildsFromMarkdown } = require('./builds');
+const { fetchCatalog, fetchDocument } = require('./notion');
+const { buildsFromCatalog, buildsFromMarkdown } = require('./builds');
 
 (async () => {
   try {
     const pageId = process.env.NOTION_PAGE_ID;
     if (!pageId) throw new Error('NOTION_PAGE_ID가 없어요. .env를 확인해주세요.');
 
-    console.log('노션에서 도감을 읽는 중...');
-    const doc = await fetchDocument(pageId);
+    console.log('노션에서 도감을 읽는 중... (수십 초 걸릴 수 있어요)');
+
+    const catalog = await fetchCatalog(pageId);
+    let found = [];
+    let dump = '';
+    let title = '';
+
+    if (catalog && catalog.builds.length > 0) {
+      console.log(`\n구조: 데이터베이스 · 빌드 페이지 ${catalog.pageCount}개`);
+      found = buildsFromCatalog(catalog);
+      title = catalog.title;
+      dump = catalog.builds
+        .map((b) => `# ${[...b.groupPath, b.name].join(' › ')}\n\n${b.markdown}`)
+        .join('\n\n---\n\n');
+    } else {
+      const doc = await fetchDocument(pageId);
+      console.log(`\n구조: 헤딩 · 페이지 ${doc.pageCount}개`);
+      found = buildsFromMarkdown(doc.markdown, { pageUrl: doc.pageUrl });
+      title = doc.title;
+      dump = doc.markdown;
+    }
 
     const outDir = path.join(__dirname, '..', 'data');
     fs.mkdirSync(outDir, { recursive: true });
     const outPath = path.join(outDir, 'notion-dump.md');
-    fs.writeFileSync(outPath, doc.markdown, 'utf8');
+    fs.writeFileSync(outPath, dump, 'utf8');
 
-    const found = buildsFromMarkdown(doc.markdown, { pageUrl: doc.pageUrl });
-    console.log(`\n제목: ${doc.title}`);
-    console.log(`페이지 ${doc.pageCount}개 · 마크다운 ${doc.markdown.length.toLocaleString('ko-KR')}자`);
-    console.log(`저장: ${outPath}`);
+    console.log(`제목: ${title}`);
+    console.log(`원본 ${dump.length.toLocaleString('ko-KR')}자 · 저장: ${outPath}`);
     console.log(`\n인식된 빌드 ${found.length}개`);
 
-    for (const category of ['공성전', '파괴신']) {
-      const list = found.filter((b) => b.category === category);
-      console.log(`\n[${category}] ${list.length}개`);
+    const groups = new Map();
+    for (const b of found) {
+      const key = b.group || '(묶음 없음)';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(b);
+    }
+
+    for (const [group, list] of groups) {
+      const cat = list[0].category;
+      console.log(`\n[${group}] ${list.length}개 → 카테고리: ${cat || '미분류 (명령어에 안 잡힘)'}`);
       for (const b of list.slice(0, 40)) {
         const days = b.weekdays && b.weekdays.length ? ` (${b.weekdays.join('·')}요일)` : '';
-        console.log(`  - ${b.label}${days} · 본문 ${b.body.length}자`);
+        console.log(`  - ${b.name}${days} · 본문 ${b.body.length}자`);
       }
       if (list.length > 40) console.log(`  … 외 ${list.length - 40}개`);
     }
 
-    // 헤딩은 있는데 카테고리를 못 정한 섹션 — 파서 조정이 필요한지 알려준다
-    const headings = doc.markdown.match(/^#{1,6}\s+.+$/gm) || [];
-    console.log(`\n전체 헤딩 ${headings.length}개 중 빌드로 분류된 건 ${found.length}개`);
-    if (found.length === 0) {
-      console.log('\n헤딩 목록 (앞 40개):');
-      for (const h of headings.slice(0, 40)) console.log(`  ${h}`);
+    const unmatched = found.filter((b) => !b.category);
+    if (unmatched.length > 0) {
+      console.log(
+        `\n⚠️ ${unmatched.length}개는 공성전·파괴신 어디에도 안 잡혀요 (명령어로 검색되지 않음)`,
+      );
     }
   } catch (e) {
     console.error(`\n실패: ${e.message}`);

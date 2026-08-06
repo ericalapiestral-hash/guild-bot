@@ -16,6 +16,8 @@ const MIN_INTERVAL_MS = 350;
 /** 폭주 방지 상한 */
 const MAX_PAGES = 300;
 const MAX_PAGE_DEPTH = 8;
+/** 데이터베이스 안의 데이터베이스를 몇 겹까지 따라갈지 */
+const MAX_GROUP_DEPTH = 4;
 const MAX_HEADING_LEVEL = 6;
 /** 128MB 호스팅에서 OOM으로 죽는 대신 잡히는 오류로 만들기 위한 상한 */
 const MAX_MARKDOWN_CHARS = 4_000_000;
@@ -70,7 +72,10 @@ function explain(status, body) {
 }
 
 /** 429/5xx는 Retry-After를 존중하며 재시도한다. */
-async function request(pathname, { searchParams, timeoutMs = 15_000, attempts = 4 } = {}) {
+async function request(
+  pathname,
+  { searchParams, method = 'GET', json, timeoutMs = 15_000, attempts = 4 } = {},
+) {
   const token = (process.env.NOTION_TOKEN || '').trim();
   if (!token) {
     throw new Error(
@@ -90,13 +95,16 @@ async function request(pathname, { searchParams, timeoutMs = 15_000, attempts = 
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     let response;
     try {
-      response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Notion-Version': NOTION_VERSION,
-        },
-        signal: ac.signal,
-      });
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'Notion-Version': NOTION_VERSION,
+      };
+      const init = { method, headers, signal: ac.signal };
+      if (json !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(json);
+      }
+      response = await fetch(url, init);
     } catch (e) {
       lastError =
         e && e.name === 'AbortError'
@@ -445,6 +453,89 @@ async function renderBlocks(blocks, ctx, { headingLevel, indent = '', startHeadi
   return { text: lines.join('\n'), lastHeadingLevel };
 }
 
+/** 데이터베이스 행 전체를 페이지네이션 끝까지 모은다. */
+async function queryDatabase(databaseId) {
+  const out = [];
+  let cursor = null;
+  for (let round = 0; round < MAX_PAGINATION_ROUNDS; round += 1) {
+    const json = cursor ? { page_size: 100, start_cursor: cursor } : { page_size: 100 };
+    const body = await request(`/databases/${databaseId}/query`, { method: 'POST', json });
+    if (Array.isArray(body.results)) out.push(...body.results);
+
+    const next = body.has_more ? body.next_cursor : null;
+    if (!next || next === cursor) return out;
+    cursor = next;
+  }
+  console.warn(`[노션] 데이터베이스 ${databaseId}의 행이 너무 많아 중단했어요.`);
+  return out;
+}
+
+/**
+ * 데이터베이스를 훑는다. 행 안에 또 데이터베이스가 있으면 "묶음"으로 보고 한 단계 더 들어가고,
+ * 없으면 그 행 자체를 빌드로 본다. (도감이 PVE 구분 → 공성전 리스트 → 빌드 구조라서)
+ */
+async function walkDatabase(databaseId, groupPath, out, ctx) {
+  if (ctx.seen.has(databaseId)) return;
+  ctx.seen.add(databaseId);
+
+  const rows = await queryDatabase(databaseId);
+
+  for (const row of rows) {
+    const name = pageTitle(row).trim();
+    if (!name || name === '(제목 없음)') continue;
+    if (ctx.seen.has(row.id)) continue;
+    ctx.seen.add(row.id);
+
+    let blocks = [];
+    try {
+      blocks = await fetchChildren(row.id);
+    } catch (e) {
+      console.warn(`[노션] "${name}" 행을 읽지 못했어요: ${e.message}`);
+      continue;
+    }
+
+    const inner = blocks.filter((b) => b.type === 'child_database');
+    if (inner.length > 0 && groupPath.length < MAX_GROUP_DEPTH) {
+      for (const db of inner) await walkDatabase(db.id, [...groupPath, name], out, ctx);
+      continue;
+    }
+
+    // 빌드 행 — 페이지 본문을 통째로 렌더링한다
+    const { text } = await renderBlocks(blocks, ctx, { headingLevel: 0 });
+    if (!text.trim()) continue; // 아직 안 쓴 빈 항목
+    ctx.pageCount += 1;
+    out.push({ name, groupPath, url: row.url || null, markdown: text });
+  }
+}
+
+/**
+ * 도감이 데이터베이스로 되어 있으면 빌드 목록을 통째로 읽어온다.
+ * @returns {Promise<null|{title: string, pageUrl: string, pageCount: number, builds: object[]}>}
+ *   데이터베이스가 하나도 없으면 null (헤딩 방식으로 넘어가라는 뜻)
+ */
+async function fetchCatalog(rawPageId) {
+  const rootId = normalizePageId(rawPageId);
+  if (!rootId) {
+    throw new Error('NOTION_PAGE_ID가 올바르지 않아요. 노션 페이지 주소나 32자리 ID를 넣어주세요.');
+  }
+
+  const rootPage = await request(`/pages/${rootId}`);
+  const rootBlocks = await fetchChildren(rootId);
+  const databases = rootBlocks.filter((b) => b.type === 'child_database');
+  if (databases.length === 0) return null;
+
+  const ctx = { seen: new Set([rootId]), pageCount: 0, depth: 0, chars: 0, warnedPages: false };
+  const builds = [];
+  for (const db of databases) await walkDatabase(db.id, [], builds, ctx);
+
+  return {
+    title: pageTitle(rootPage),
+    pageUrl: (rootPage && rootPage.url) || `https://www.notion.so/${rootId.replace(/-/g, '')}`,
+    pageCount: ctx.pageCount,
+    builds,
+  };
+}
+
 /**
  * 도감 페이지 전체(하위 페이지 포함)를 마크다운 한 덩어리로 만든다.
  * @returns {Promise<{title: string, markdown: string, pageCount: number, pageUrl: string}>}
@@ -469,4 +560,4 @@ async function fetchDocument(rawPageId) {
   };
 }
 
-module.exports = { fetchDocument, normalizePageId, NOTION_VERSION };
+module.exports = { fetchCatalog, fetchDocument, normalizePageId, NOTION_VERSION };
