@@ -33,6 +33,26 @@ function isLogChannel(channelId) {
   return Boolean(id) && id === channelId;
 }
 
+/**
+ * /청소는 여러 번 나눠 지우기 때문에 일괄삭제 이벤트가 여러 개 뜬다.
+ * 명령이 스스로 요약 로그를 남기므로, 그동안의 일괄삭제 이벤트는 건너뛴다.
+ */
+const commandBulkUntil = new Map();
+
+function markCommandBulk(channelId, ms = 20_000) {
+  commandBulkUntil.set(channelId, Date.now() + ms);
+}
+
+function isCommandBulk(channelId) {
+  const until = commandBulkUntil.get(channelId);
+  if (!until) return false;
+  if (Date.now() > until) {
+    commandBulkUntil.delete(channelId);
+    return false;
+  }
+  return true;
+}
+
 /** 로그 채널을 가져온다. 없거나 못 쓰면 null. */
 async function resolveChannel(guild) {
   const id = logChannelId();
@@ -87,4 +107,13 @@ function userLine(user) {
   return `${user} · \`${user.tag ?? user.username ?? '?'}\` (${user.id})`;
 }
 
-module.exports = { sendLog, makeEmbed, clamp, userLine, isLogChannel, logChannelId };
+module.exports = {
+  sendLog,
+  makeEmbed,
+  clamp,
+  userLine,
+  isLogChannel,
+  logChannelId,
+  markCommandBulk,
+  isCommandBulk,
+};

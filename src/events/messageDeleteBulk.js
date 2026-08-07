@@ -1,5 +1,5 @@
 const { Events } = require('discord.js');
-const { sendLog, makeEmbed, clamp, isLogChannel } = require('../logger');
+const { sendLog, makeEmbed, clamp, isLogChannel, isCommandBulk } = require('../logger');
 
 module.exports = {
   name: Events.MessageBulkDelete,
@@ -7,8 +7,8 @@ module.exports = {
     const guild = channel && channel.guild;
     if (!guild) return;
     if (isLogChannel(channel.id)) return;
-
-    // /청소 명령은 스스로 자세한 로그를 남기므로 여기서는 요약만 남긴다
+    // /청소가 돌고 있으면 그 명령이 스스로 요약 로그를 남긴다
+    if (isCommandBulk(channel.id)) return;
     const authors = new Map();
     for (const m of messages.values()) {
       if (m.partial || !m.author) continue;
