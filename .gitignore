@@ -6,3 +6,6 @@ config.json
 # 노션에서 읽어온 것들 — 만료되는 이미지 URL이 들어있고 봇이 알아서 다시 만든다
 data/notion-dump.md
 data/builds.json
+
+# 음성 체류시간 기록 (봇이 쌓는 실데이터)
+data/voice.json

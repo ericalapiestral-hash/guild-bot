@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Events, REST, Routes } = require('discord.js');
 const builds = require('../builds');
+const voice = require('../voiceTime');
 
 /** 노션 도감 자동 재동기화 주기 */
 const BUILD_REFRESH_MS = 30 * 60 * 1000;
@@ -11,6 +12,12 @@ module.exports = {
   once: true,
   async execute(client) {
     console.log(`로그인 완료: ${client.user.tag}`);
+
+    // 봇이 꺼져 있는 동안 이미 음성방에 있던 사람들을 지금부터 통화 중으로 잡는다
+    for (const guild of client.guilds.cache.values()) {
+      const n = voice.seed(guild);
+      if (n > 0) console.log(`[음성] ${guild.name} — 통화 중인 ${n}명을 집계에 올렸어요`);
+    }
 
     // 노션 도감 읽어오기 — 실패해도 봇은 계속 동작한다(캐시 사용).
     builds.init().catch((e) => console.warn('[빌드] 초기화 실패:', e.message));
