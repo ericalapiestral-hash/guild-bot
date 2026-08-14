@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>턴 위치 지정</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+    body { cursor: crosshair; user-select: none; }
+    #dim {
+      position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+    }
+    #guide {
+      position: fixed; top: 24px; left: 50%; transform: translateX(-50%);
+      background: rgba(16, 18, 26, 0.92); color: #eee;
+      font-family: 'Malgun Gothic', sans-serif; font-size: 14px;
+      padding: 10px 18px; border-radius: 10px; text-align: center; line-height: 1.6;
+      pointer-events: none;
+    }
+    #guide b { color: #ffd166; }
+    #rect {
+      position: fixed; display: none;
+      border: 2px solid #4ade80;
+      background: rgba(74, 222, 128, 0.15);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="dim"></div>
+  <div id="guide">
+    게임 화면에서 <b>턴 숫자가 표시되는 곳</b>을 드래그로 감싸주세요<br />
+    <small>숫자만 딱 맞게 감쌀수록 인식이 정확해요 · <b>ESC</b> 취소</small>
+  </div>
+  <div id="rect"></div>
+  <script src="picker.js"></script>
+</body>
+</html>

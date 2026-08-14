@@ -1,0 +1,17 @@
+{
+  "name": "guild-overlay",
+  "version": "0.1.0",
+  "description": "세나 리버스 빌드 오버레이 — 게임 화면의 턴 숫자를 읽어 스킬 순서를 자동으로 넘겨준다",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "selftest": "electron . --selftest",
+    "test": "node test/steps.test.js"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0"
+  },
+  "dependencies": {
+    "tesseract.js": "^5.1.1"
+  }
+}

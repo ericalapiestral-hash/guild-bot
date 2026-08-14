@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <title>길드 오버레이</title>
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+  <div id="app">
+    <header id="titlebar">
+      <span id="title">⚔️ 빌드 오버레이</span>
+      <span id="turn-badge" title="인식된 턴">턴 —</span>
+      <button id="btn-min" title="접기/펼치기">▾</button>
+      <button id="btn-close" title="닫기 (Ctrl+Alt+O로 다시 열기 불가 — 완전히 종료됨)">✕</button>
+    </header>
+
+    <div id="lock-hint" class="hidden">🔒 클릭 통과 중 — <b>Ctrl+Alt+L</b>로 해제</div>
+
+    <main id="body">
+      <section id="pick-row">
+        <div id="tabs"></div>
+        <input id="search" type="text" placeholder="빌드 검색…" autocomplete="off" />
+        <select id="build-select" size="1"></select>
+      </section>
+
+      <section id="variants" class="hidden"></section>
+
+      <section id="steps"></section>
+
+      <section id="ocr-row">
+        <button id="btn-region" title="게임 화면에서 턴 숫자가 보이는 곳을 드래그로 지정 (Ctrl+Alt+R)">턴 위치 지정</button>
+        <label id="auto-label" title="턴 숫자를 읽어 자동으로 다음 단계로 넘어가요">
+          <input type="checkbox" id="auto-toggle" /> 자동
+        </label>
+        <button id="btn-prev" title="이전 단계 (Ctrl+Alt+←)">◀</button>
+        <button id="btn-next" title="다음 단계 (Ctrl+Alt+→)">▶</button>
+        <span id="ocr-status">턴 위치 미지정</span>
+      </section>
+
+      <footer id="hints">
+        Ctrl+Alt+O 숨기기 · Ctrl+Alt+L 클릭통과 · Ctrl+Alt+←→ 단계 이동
+        <input id="opacity" type="range" min="25" max="100" value="88" title="배경 진하기" />
+      </footer>
+
+      <div id="empty" class="hidden"></div>
+    </main>
+  </div>
+
+  <video id="cap" style="display:none" muted></video>
+  <canvas id="crop" style="display:none"></canvas>
+  <script src="overlay.js"></script>
+</body>
+</html>

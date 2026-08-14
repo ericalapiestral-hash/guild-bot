@@ -9,3 +9,7 @@ data/builds.json
 
 # 음성 체류시간 기록 (봇이 쌓는 실데이터)
 data/voice.json
+
+# 오버레이 앱
+overlay/node_modules/
+overlay/.cache/

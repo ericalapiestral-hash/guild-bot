@@ -1,0 +1,184 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg-alpha: 0.88;
+  --accent: #ffd166;
+  --now: #4ade80;
+}
+
+html, body { background: transparent; height: 100%; overflow: hidden; }
+
+body {
+  font-family: 'Malgun Gothic', 'Segoe UI', sans-serif;
+  font-size: 13px;
+  color: #eee;
+  user-select: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: rgba(16, 18, 26, var(--bg-alpha));
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* ── 제목줄 (창 드래그 영역) */
+#titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  -webkit-app-region: drag;
+}
+#title { font-weight: 700; flex: 1; font-size: 12px; }
+#turn-badge {
+  background: rgba(74, 222, 128, 0.15);
+  color: var(--now);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-weight: 700;
+  font-size: 12px;
+}
+#titlebar button {
+  -webkit-app-region: no-drag;
+  background: none;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+}
+#titlebar button:hover { color: #fff; }
+
+#lock-hint {
+  background: rgba(255, 209, 102, 0.15);
+  color: var(--accent);
+  text-align: center;
+  padding: 3px;
+  font-size: 11px;
+}
+
+#body { display: flex; flex-direction: column; flex: 1; padding: 8px; gap: 8px; min-height: 0; }
+#body.collapsed { display: none; }
+
+/* ── 빌드 선택 */
+#pick-row { display: flex; flex-direction: column; gap: 5px; }
+#tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+#tabs button {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: #ccc;
+  border-radius: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+#tabs button.on { background: var(--accent); color: #222; font-weight: 700; }
+
+#search, #build-select {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #eee;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  outline: none;
+}
+#build-select option { background: #1a1c26; }
+
+/* ── 변형(분기) 선택 */
+#variants { display: flex; gap: 4px; flex-wrap: wrap; }
+#variants button {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  color: #ccc;
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+#variants button.on { background: #5865f2; color: #fff; font-weight: 700; }
+
+/* ── 단계 표시 */
+#steps { display: flex; flex-direction: column; gap: 6px; flex: 1; min-height: 0; overflow-y: auto; }
+#steps::-webkit-scrollbar { width: 5px; }
+#steps::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
+.step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+.step .turn {
+  min-width: 52px;
+  text-align: center;
+  font-weight: 800;
+  border-radius: 6px;
+  padding: 3px 0;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 13px;
+}
+.step .act { flex: 1; font-size: 15px; }
+.step .seg { font-size: 10px; color: #888; }
+
+.step.done { opacity: 0.4; }
+.step.now {
+  background: rgba(74, 222, 128, 0.16);
+  outline: 2px solid rgba(74, 222, 128, 0.7);
+}
+.step.now .turn { background: var(--now); color: #10241a; }
+.step.now .act { font-weight: 800; font-size: 17px; }
+
+/* ── OCR 줄 */
+#ocr-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#ocr-row button {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #ddd;
+  border-radius: 6px;
+  padding: 4px 9px;
+  cursor: pointer;
+  font-size: 12px;
+}
+#ocr-row button:hover { background: rgba(255, 255, 255, 0.18); }
+#auto-label { display: flex; align-items: center; gap: 3px; font-size: 12px; cursor: pointer; }
+#ocr-status { font-size: 11px; color: #9aa; flex: 1; text-align: right; }
+#ocr-status.err { color: #f87171; }
+#ocr-status.on { color: var(--now); }
+
+#hints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: #778;
+}
+#hints input[type='range'] { width: 70px; margin-left: auto; }
+
+#empty {
+  padding: 14px;
+  background: rgba(248, 113, 113, 0.1);
+  border-radius: 8px;
+  color: #fca5a5;
+  font-size: 12px;
+  line-height: 1.6;
+}
+#empty button {
+  margin-top: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  border: none;
+  color: #eee;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.hidden { display: none !important; }
