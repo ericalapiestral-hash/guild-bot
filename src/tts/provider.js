@@ -1,17 +1,22 @@
-// TTS 공급자 어댑터 — 텍스트를 보내면 Ogg/Opus 오디오를 돌려받는다.
+// TTS 어댑터 — 문장을 주면 Ogg/Opus 오디오를 돌려준다. 두 가지 방식을 지원한다.
 //
-// ⚠️ 반드시 Ogg/Opus(또는 WebM/Opus)로 받아야 한다.
-//    MP3·WAV로 받으면 ffmpeg나 opus 인코더가 필요해지는데, 무료 호스팅 128MB에서는
-//    그 순간 메모리가 터진다. 그래서 여기서 응답 포맷을 확인하고 아니면 거절한다.
+//  1) HTTP  : TTS_URL 로 요청 → 응답 본문이 오디오
+//  2) 로컬 실행: TTS_COMMAND 로 프로그램을 돌려서 → 표준출력이나 임시 파일에서 오디오
 //
-// 설정은 .env로 한다:
-//   TTS_URL      필수. {{text}} 자리에 문장이 들어간다. 없으면 ?text= 로 붙인다.
-//   TTS_METHOD   GET(기본) 또는 POST
-//   TTS_HEADERS  JSON 문자열. 예: {"Authorization":"Bearer ..."}
-//   TTS_BODY     POST일 때 본문 템플릿. {{text}} 치환. JSON이면 Content-Type도 같이 넣을 것
-//   TTS_TIMEOUT  밀리초 (기본 8000)
+// ⚠️ 어느 쪽이든 결과는 Ogg/Opus(또는 WebM/Opus)여야 한다.
+//    MP3·WAV로 주면 ffmpeg나 opus 인코더가 필요해지는데, 무료 호스팅 128MB에서는
+//    그 순간 메모리가 터진다. 그래서 여기서 형식을 확인하고 아니면 거절한다.
+//
+// .env 예시
+//   TTS_URL=http://localhost:5000/tts?text={{text}}
+//   TTS_COMMAND=piper --model ko_KR.onnx --output_file {{out}}      ← 문장은 표준입력으로
+//   TTS_COMMAND=python tts.py --text {{text}} --out {{out}}          ← 문장을 인자로
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { Readable } = require('node:stream');
 
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -20,6 +25,7 @@ const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
 
 function config() {
   const url = (process.env.TTS_URL || '').trim();
+  const command = (process.env.TTS_COMMAND || '').trim();
   let headers = {};
   let headerError = null;
   if (process.env.TTS_HEADERS) {
@@ -33,6 +39,7 @@ function config() {
   }
   return {
     url,
+    command,
     method: (process.env.TTS_METHOD || 'GET').toUpperCase(),
     headers,
     headerError,
@@ -43,7 +50,22 @@ function config() {
 
 /** TTS가 설정돼 있는지 (헤더가 깨져 있어도 여기서 터지지 않게 한다) */
 function isConfigured() {
-  return Boolean(config().url);
+  const cfg = config();
+  return Boolean(cfg.url || cfg.command);
+}
+
+/** 상태 표시용 한 줄 */
+function describeTarget() {
+  const cfg = config();
+  if (cfg.command) return `로컬 실행 · ${cfg.command.split(/\s+/)[0]}`;
+  if (cfg.url) {
+    try {
+      return `HTTP · ${new URL(cfg.url.replace('{{text}}', 'x')).host}`;
+    } catch {
+      return 'HTTP';
+    }
+  }
+  return '없음';
 }
 
 /** {{text}} 자리를 채운다 (JSON 본문에 넣어도 깨지지 않게 이스케이프) */
@@ -62,31 +84,32 @@ function describeFormat(head) {
   return '알 수 없는 형식';
 }
 
-/**
- * 문장 하나를 Ogg/Opus 오디오 스트림으로 바꾼다.
- * @param {string} text
- * @returns {Promise<import('node:stream').Readable>}
- */
-async function synthesize(text) {
-  const cfg = config();
-  if (!cfg.url) {
+function ensureOpus(buffer) {
+  if (buffer.length === 0) throw new Error('TTS가 빈 응답을 줬어요.');
+  const format = describeFormat(buffer);
+  if (format !== 'ogg' && format !== 'webm') {
     throw new Error(
-      'TTS 서버가 설정되지 않았어요. .env에 TTS_URL을 넣어주세요. (Ogg/Opus를 돌려주는 주소여야 해요)',
+      `TTS가 Ogg/Opus가 아니라 ${format}을(를) 줬어요. ` +
+        'Ogg/Opus(48kHz)로 내보내도록 맞춰주세요 — 다른 포맷은 변환기(ffmpeg)가 필요해서 이 봇에서 재생할 수 없어요.',
     );
   }
+  return format;
+}
+
+// ─────────────────────────────── HTTP 방식
+
+async function viaHttp(cfg, text) {
   if (cfg.headerError) throw new Error(cfg.headerError);
 
   const hasSlot = cfg.url.includes('{{text}}');
-  // 잘린 서로게이트가 섞이면 encodeURIComponent가 던진다 — 미리 정리한다
-  const safe = typeof text.toWellFormed === 'function' ? text.toWellFormed() : text;
   const url = hasSlot
-    ? fill(cfg.url, encodeURIComponent(safe), { json: false })
-    : `${cfg.url}${cfg.url.includes('?') ? '&' : '?'}text=${encodeURIComponent(safe)}`;
+    ? fill(cfg.url, encodeURIComponent(text), { json: false })
+    : `${cfg.url}${cfg.url.includes('?') ? '&' : '?'}text=${encodeURIComponent(text)}`;
 
   const init = { method: cfg.method, headers: { ...cfg.headers } };
   if (cfg.method !== 'GET' && cfg.method !== 'HEAD') {
     const isJson = /json/i.test(init.headers['content-type'] || '');
-    init.body = cfg.body ? fill(cfg.body, safe, { json: isJson }) : safe;
+    init.body = cfg.body ? fill(cfg.body, text, { json: isJson }) : text;
   }
 
   const ac = new AbortController();
@@ -107,7 +130,6 @@ async function synthesize(text) {
 
     if (!response.ok) throw new Error(`TTS 서버 오류 (HTTP ${response.status})`);
 
-    // 크기를 미리 알려주면 받기 전에 끊는다
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > MAX_AUDIO_BYTES) {
       ac.abort();
@@ -133,21 +155,149 @@ async function synthesize(text) {
       throw e;
     }
 
-    const buffer = Buffer.concat(chunks, received);
-    if (buffer.length === 0) throw new Error('TTS 서버가 빈 응답을 줬어요.');
-
-    const format = describeFormat(buffer);
-    if (format !== 'ogg' && format !== 'webm') {
-      throw new Error(
-        `TTS 서버가 Ogg/Opus가 아니라 ${format}을(를) 줬어요. ` +
-          'Ogg/Opus(48kHz)로 내보내도록 서버를 맞춰주세요 — 다른 포맷은 변환기(ffmpeg)가 필요해서 이 봇에서 재생할 수 없어요.',
-      );
-    }
-
-    return { stream: Readable.from(buffer), format };
+    return Buffer.concat(chunks, received);
   } finally {
     clearTimeout(timer);
   }
 }
 
-module.exports = { synthesize, isConfigured, MAX_AUDIO_BYTES };
+// ─────────────────────────────── 로컬 실행 방식
+
+/** 명령 문자열을 인자 배열로 쪼갠다 (따옴표 유지) */
+function splitArgs(command) {
+  const out = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(command)) !== null) out.push(m[1] ?? m[2] ?? m[3]);
+  return out;
+}
+
+async function viaCommand(cfg, text) {
+  const parts = splitArgs(cfg.command);
+  if (parts.length === 0) throw new Error('TTS_COMMAND가 비어 있어요.');
+
+  const usesOutFile = cfg.command.includes('{{out}}');
+  const outPath = usesOutFile
+    ? path.join(os.tmpdir(), `guildbot-tts-${process.pid}-${Date.now()}.ogg`)
+    : null;
+
+  // ⚠️ 절대 shell을 쓰지 않는다. 채팅 내용이 그대로 들어오므로 shell을 켜면
+  //    누가 채팅에 명령어를 심어 서버에서 실행시킬 수 있다.
+  //    shell 없이 argv로 넘기면 문자열이 그대로 인자 하나가 되어 안전하다.
+  const usesTextArg = cfg.command.includes('{{text}}');
+  const argv = parts
+    .slice(1)
+    .map((a) => a.split('{{text}}').join(text).split('{{out}}').join(outPath ?? ''));
+
+  return await new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawn(parts[0], argv, { stdio: ['pipe', 'pipe', 'pipe'], shell: false });
+    } catch (e) {
+      reject(new Error(`TTS 프로그램을 실행하지 못했어요: ${e.message}`));
+      return;
+    }
+
+    const chunks = [];
+    let received = 0;
+    let stderr = '';
+    let settled = false;
+
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        child.kill();
+      } catch {
+        /* 이미 끝남 */
+      }
+      fn(arg);
+    };
+
+    const timer = setTimeout(() => {
+      finish(reject, new Error(`TTS 프로그램이 끝나지 않아요 (${cfg.timeoutMs / 1000}초 초과).`));
+    }, cfg.timeoutMs);
+
+    child.on('error', (e) =>
+      finish(reject, new Error(`TTS 프로그램을 실행하지 못했어요: ${e.message}`)),
+    );
+    child.stderr.on('data', (d) => {
+      if (stderr.length < 2000) stderr += d.toString();
+    });
+
+    if (!usesOutFile) {
+      child.stdout.on('data', (chunk) => {
+        received += chunk.length;
+        if (received > MAX_AUDIO_BYTES) {
+          finish(reject, new Error('TTS 출력이 너무 커요 (2MB 초과).'));
+          return;
+        }
+        chunks.push(chunk);
+      });
+    } else {
+      child.stdout.resume(); // 버퍼가 막히지 않게 흘려보낸다
+    }
+
+    child.on('close', (code) => {
+      if (settled) return;
+      if (code !== 0) {
+        finish(
+          reject,
+          new Error(`TTS 프로그램이 오류로 끝났어요 (종료 코드 ${code}) ${stderr.trim().slice(0, 200)}`),
+        );
+        return;
+      }
+      if (!usesOutFile) {
+        finish(resolve, Buffer.concat(chunks, received));
+        return;
+      }
+      try {
+        const stat = fs.statSync(outPath);
+        if (stat.size > MAX_AUDIO_BYTES) {
+          fs.rmSync(outPath, { force: true });
+          finish(reject, new Error('TTS 출력 파일이 너무 커요 (2MB 초과).'));
+          return;
+        }
+        const buffer = fs.readFileSync(outPath);
+        fs.rmSync(outPath, { force: true });
+        finish(resolve, buffer);
+      } catch (e) {
+        finish(reject, new Error(`TTS 출력 파일을 읽지 못했어요: ${e.message}`));
+      }
+    });
+
+    // 문장을 인자로 안 넘겼으면 표준입력으로 준다
+    if (!usesTextArg) {
+      child.stdin.on('error', () => {}); // 프로그램이 stdin을 안 읽으면 EPIPE가 난다
+      child.stdin.end(text);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+// ─────────────────────────────── 공개 API
+
+/**
+ * 문장 하나를 Ogg/Opus 오디오로 바꾼다.
+ * @param {string} text
+ * @returns {Promise<{stream: import('node:stream').Readable, format: 'ogg'|'webm'}>}
+ */
+async function synthesize(text) {
+  const cfg = config();
+  if (!cfg.url && !cfg.command) {
+    throw new Error(
+      'TTS가 설정되지 않았어요. .env에 TTS_URL(HTTP) 또는 TTS_COMMAND(로컬 실행)를 넣어주세요.',
+    );
+  }
+
+  // 잘린 서로게이트가 섞이면 인코딩·전달에서 터진다 — 미리 정리한다
+  const safe = typeof text.toWellFormed === 'function' ? text.toWellFormed() : text;
+
+  const buffer = cfg.command ? await viaCommand(cfg, safe) : await viaHttp(cfg, safe);
+  const format = ensureOpus(buffer);
+  return { stream: Readable.from(buffer), format };
+}
+
+module.exports = { synthesize, isConfigured, describeTarget, MAX_AUDIO_BYTES };
