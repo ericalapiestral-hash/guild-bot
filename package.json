@@ -7,12 +7,13 @@
     "start": "node src/index.js",
     "deploy": "node src/deploy-commands.js",
     "notion:dump": "node src/dump-notion.js",
-    "test": "node test/builds.test.js && node test/notion.test.js && node test/voice.test.js"
+    "test": "node test/builds.test.js && node test/notion.test.js && node test/voice.test.js && node test/tts.test.js"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
+    "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.16.3",
     "dotenv": "^16.4.5"
   }

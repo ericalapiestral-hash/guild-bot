@@ -1,12 +1,35 @@
 const { Events } = require('discord.js');
 const { sendLog, makeEmbed, clamp, userLine } = require('../logger');
 const voice = require('../voiceTime');
+const reader = require('../tts/reader');
+
+/** 읽어주던 방에 사람이 아무도 안 남으면 봇도 나간다 */
+function leaveIfAlone(guild, channel) {
+  if (!channel || !reader.isActive(guild.id)) return;
+  if (reader.voiceChannelOf(guild.id) !== channel.id) return;
+  const humans = channel.members.filter((m) => !m.user.bot).size;
+  if (humans === 0) reader.leave(guild.id, '방에 아무도 없어서');
+}
 
 module.exports = {
   name: Events.VoiceStateUpdate,
   async execute(oldState, newState) {
     const guild = newState.guild || oldState.guild;
     if (!guild) return;
+
+    // 봇 자신의 이동 — 관리자가 다른 방으로 끌어다 놓으면 세션 정보를 맞춰줘야
+    // "지금 있는 방"이 어긋나서 빈 방에서 계속 읽는 일이 생긴다
+    const selfId = guild.client.user?.id;
+    if (selfId && (newState.id || newState.member?.id) === selfId) {
+      if (newState.channelId) reader.syncChannel(guild.id, newState.channelId);
+      else if (reader.isActive(guild.id)) reader.leave(guild.id, '음성방에서 내보내져서');
+      return;
+    }
+
+    // 읽어주던 방이 비었는지 확인
+    if (oldState.channelId && oldState.channelId !== newState.channelId) {
+      leaveIfAlone(guild, oldState.channel);
+    }
 
     const member = newState.member || oldState.member;
     if (!member || member.user.bot) return;

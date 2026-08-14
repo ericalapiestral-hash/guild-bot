@@ -10,6 +10,7 @@ const {
   MessageFlags,
 } = require('discord.js');
 const voice = require('./voiceTime');
+const reader = require('./tts/reader');
 
 /** 메시지 내용 없이도 돌아가는 최소 인텐트 */
 const BASE_INTENTS = [
@@ -119,8 +120,10 @@ async function login(intents, withContent) {
     current = client;
     if (!withContent) {
       console.warn(
-        '[경고] Message Content Intent가 꺼져 있어 삭제·수정된 메시지의 **내용**은 기록되지 않아요.\n' +
-          '        개발자 포털 → Bot → Message Content Intent를 켜고 봇을 다시 시작하면 내용까지 남아요.',
+        '[경고] Message Content Intent가 꺼져 있어요. 이것 때문에 안 되는 것:\n' +
+          '        · 삭제·수정된 메시지의 **내용**이 로그에 안 남아요\n' +
+          '        · **채팅 자동 읽어주기가 동작하지 않아요** (/읽어줘 내용:... 만 가능)\n' +
+          '        개발자 포털 → Bot → Message Content Intent를 켜고 봇을 다시 시작해주세요.',
       );
     }
     return client;
@@ -156,6 +159,12 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`\n${signal} — 정리하고 종료합니다.`);
   try {
+    // 음성방에 유령으로 남지 않게 먼저 끊는다
+    reader.destroyAll();
+  } catch (e) {
+    console.warn('[읽기] 종료 시 연결 정리 실패:', e.message);
+  }
+  try {
     voice.flushAll();
   } catch (e) {
     console.warn('[음성] 종료 시 저장 실패:', e.message);
@@ -168,3 +177,14 @@ function shutdown(signal) {
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// 오디오 스트림처럼 핸들러가 끝난 뒤 비동기로 실패하는 것들이 있다.
+// 이게 없으면 그런 실패 하나로 봇 전체가 죽는다.
+process.on('unhandledRejection', (reason) => {
+  // 통째로 넘긴다 — 가공하면 스택도, {error: ...} 같은 객체 내용도 사라진다
+  console.error('[처리 안 된 오류]', reason instanceof Error ? reason.stack || reason.message : reason);
+});
+
+process.on('uncaughtException', (e) => {
+  console.error('[치명적 오류]', e && e.stack ? e.stack : e);
+});
