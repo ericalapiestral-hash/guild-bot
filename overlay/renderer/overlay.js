@@ -2,7 +2,6 @@
 'use strict';
 
 const { ipcRenderer } = require('electron');
-const path = require('node:path');
 const { flatten, nextIndexForTurn } = require('../lib/steps');
 
 // ─────────────────────────────── 상태
@@ -274,9 +273,9 @@ function ensureWorker() {
   setOcrStatus('인식 엔진 준비 중… (첫 실행은 다운로드 때문에 1분쯤 걸릴 수 있어요)', '');
   workerPromise = (async () => {
     const { createWorker } = require('tesseract.js');
-    // 언어 데이터는 한 번 받으면 .cache에 저장되어 다음부터는 오프라인으로 뜬다
-    const cachePath = path.join(__dirname, '..', '.cache');
-    require('node:fs').mkdirSync(cachePath, { recursive: true });
+    // 언어 데이터는 한 번 받으면 여기 저장되어 다음부터는 오프라인으로 뜬다.
+    // 포장된 앱은 앱 폴더에 못 쓰므로 메인에서 쓸 수 있는 자리를 받아온다.
+    const cachePath = await ipcRenderer.invoke('paths:ocr-cache');
     const w = await createWorker('eng', 1, { cachePath });
     await w.setParameters({
       tessedit_char_whitelist: '0123456789',

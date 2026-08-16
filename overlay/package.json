@@ -2,16 +2,53 @@
   "name": "guild-overlay",
   "version": "0.1.0",
   "description": "세나 리버스 빌드 오버레이 — 게임 화면의 턴 숫자를 읽어 스킬 순서를 자동으로 넘겨준다",
+  "author": "낭만주의",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "selftest": "electron . --selftest",
-    "test": "node test/steps.test.js"
+    "test": "node test/steps.test.js",
+    "dist": "electron-builder --win",
+    "dist:dir": "electron-builder --win --dir"
   },
   "devDependencies": {
-    "electron": "^33.2.0"
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
   },
   "dependencies": {
     "tesseract.js": "^5.1.1"
+  },
+  "build": {
+    "appId": "kr.guildbot.overlay",
+    "productName": "GuildOverlay",
+    "directories": {
+      "output": "dist"
+    },
+    "extraResources": [
+      {
+        "from": "../data",
+        "to": "data",
+        "filter": [
+          "builds.json"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/tesseract.js/**",
+      "**/node_modules/tesseract.js-core/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "guild-overlay-${version}.exe"
+    }
   }
 }

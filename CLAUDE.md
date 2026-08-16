@@ -140,6 +140,14 @@ TTS_BODY={"text":"{{text}}","format":"ogg_opus"}
 - 자동 모드는 700ms마다 지정 영역을 읽는다. 첫 실행은 인식 엔진 다운로드로 1분쯤.
 - `data/builds.json`을 직접 읽으므로 구사황·기타 묶음도 전부 보인다.
 - 게임은 **테두리 없는 창모드**여야 한다.
+- **배포용 exe**: `cd overlay && npm run dist` → `dist/guild-overlay-0.1.0.exe` (포터블 76MB, 설치 불필요).
+  CI로도 만든다 (`.github/workflows/windows.yml`).
+  - 도감을 찾는 순서: 앱에서 고른 경로 → **exe 옆 `data/builds.json`** → exe 옆 `builds.json` → 안에 넣어 둔 스냅샷.
+    포장할 때 그 시점의 `data/builds.json`이 같이 들어간다(CI 빌드에는 없다 — 캐시를 커밋하지 않으므로).
+  - 포장하면 `__dirname`이 `app.asar` 안이 된다. 도감 경로와 인식 캐시(`userData/ocr-cache`)를 그래서 따로 잡는다 —
+    **상대경로로 되돌리지 말 것.** tesseract는 `asarUnpack`으로 빼 둬야 워커가 뜬다.
+  - 윈도우에서 `npm run dist`가 winCodeSign 심볼릭 링크 오류로 멈추면, 그 캐시 폴더에
+    macOS 부분을 뺀 채(`-xr'!darwin'`) 직접 풀어 두면 지나간다. 개발자 모드를 켜도 된다.
 
 **안드로이드 (Kotlin)** — 자세한 건 [android/README.md](android/README.md)
 

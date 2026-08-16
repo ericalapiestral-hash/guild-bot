@@ -1,0 +1,43 @@
+name: PC 오버레이 EXE 빌드
+
+# 로컬에 빌드 환경이 없어도 exe를 받을 수 있게 해 둔다.
+# (도감 스냅샷 data/builds.json은 커밋하지 않으므로, 여기서 만든 exe에는 스냅샷이 없다.
+#  받은 사람이 앱에서 'builds.json 직접 선택'으로 고르거나 exe 옆에 data/builds.json을 두면 된다.)
+on:
+  push:
+    paths:
+      - 'overlay/**'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'overlay/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 설치
+        working-directory: overlay
+        run: npm install
+
+      - name: 파서 테스트
+        working-directory: overlay
+        run: npm test
+
+      - name: 포터블 EXE 빌드
+        working-directory: overlay
+        run: npm run dist
+
+      - name: EXE 올리기
+        uses: actions/upload-artifact@v4
+        with:
+          name: guild-overlay-windows-exe
+          path: overlay/dist/*.exe
+          if-no-files-found: error

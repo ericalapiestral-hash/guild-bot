@@ -18,8 +18,26 @@ const { parseSteps, groupVariants } = require('./lib/steps');
 const SELFTEST = process.argv.includes('--selftest');
 
 const CONFIG_PATH = path.join(app.getPath('userData'), 'overlay-config.json');
-/** 봇이 만들어 두는 도감 캐시 (오버레이는 이걸 그대로 읽는다) */
-const DEFAULT_BUILDS = path.join(__dirname, '..', 'data', 'builds.json');
+
+/**
+ * 봇이 만들어 두는 도감 캐시를 찾을 자리들 (앞에 있는 것이 우선).
+ * 포장하면 __dirname이 app.asar 안이라 소스 때 쓰던 상대경로가 통하지 않는다.
+ */
+function defaultBuildsCandidates() {
+  if (!app.isPackaged) {
+    return [path.join(__dirname, '..', 'data', 'builds.json')];
+  }
+  const list = [];
+  // 포터블 exe는 실행할 때마다 임시폴더에 풀리므로, 진짜 exe가 놓인 자리는 이 환경변수로 알려준다
+  if (process.env.PORTABLE_EXECUTABLE_DIR) {
+    list.push(path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'data', 'builds.json'));
+    list.push(path.join(process.env.PORTABLE_EXECUTABLE_DIR, 'builds.json'));
+  }
+  list.push(path.join(path.dirname(app.getPath('exe')), 'data', 'builds.json'));
+  // 만들 때 같이 넣어 둔 스냅샷 — 봇을 안 돌리는 사람도 일단 열리게 한다
+  list.push(path.join(process.resourcesPath, 'data', 'builds.json'));
+  return list;
+}
 
 let overlayWin = null;
 let pickerWin = null;
@@ -53,7 +71,11 @@ function saveConfig(patch) {
 // ─────────────────────────────── 도감 읽기
 
 function buildsPath() {
-  return loadConfig().buildsPath || DEFAULT_BUILDS;
+  const configured = loadConfig().buildsPath;
+  if (configured) return configured;
+  const candidates = defaultBuildsCandidates();
+  // 하나도 없으면 첫 후보를 돌려준다 — 그 경로가 오류 메시지에 그대로 나온다
+  return candidates.find((p) => fs.existsSync(p)) || candidates[0];
 }
 
 /** builds.json → 오버레이용으로 미리 파싱해서 내려준다 */
@@ -244,6 +266,20 @@ ipcMain.handle('builds:pick-file', async () => {
   saveConfig({ buildsPath: r.filePaths[0] });
   watchBuilds();
   return loadBuilds();
+});
+
+/**
+ * 인식 엔진이 언어 데이터를 받아 둘 자리.
+ * 포장하면 앱 폴더가 읽기 전용(asar)이라, 쓸 수 있는 사용자 폴더를 내려준다.
+ */
+ipcMain.handle('paths:ocr-cache', () => {
+  const dir = path.join(app.getPath('userData'), 'ocr-cache');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (e) {
+    console.warn('[인식] 캐시 폴더를 못 만들었습니다:', e.message);
+  }
+  return dir;
 });
 
 ipcMain.handle('config:get', () => loadConfig());
