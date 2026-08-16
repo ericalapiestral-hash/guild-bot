@@ -30,6 +30,8 @@ const state = {
   pendingTurn: null, // 같은 값이 두 번 연속 읽혀야 반영 (오인식 방어)
   sawGap: false, // 턴 표시가 사라졌다 돌아오는 중 — 라운드가 넘어갔을 수 있다
   everRead: false, // 자동을 켠 뒤 한 번이라도 숫자를 읽었는지
+  apiUrl: '', // 턴 인식 서버 (비우면 앱 안에서 읽는다)
+  apiToken: '',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -86,6 +88,9 @@ async function loadBuilds({ firstRun = false } = {}) {
     $('opacity').value = config.opacity;
     applyOpacity(config.opacity);
   }
+  state.apiUrl = typeof config.turnApiUrl === 'string' ? config.turnApiUrl.trim() : '';
+  state.apiToken = typeof config.turnApiToken === 'string' ? config.turnApiToken : '';
+  $('api-url').value = state.apiUrl;
 }
 
 function categories() {
@@ -281,6 +286,29 @@ let ocrBusy = false;
 let autoGen = 0;
 /** 연속으로 숫자를 못 읽은 횟수 (사용자에게 알려주기 위해) */
 let ocrMisses = 0;
+/** 서버가 안 붙을 때 매 프레임 같은 오류를 띄우지 않으려고 */
+let serverDown = false;
+
+/**
+ * 턴 인식 서버에 회색조 조각을 그대로 보낸다.
+ * 이미지 형식으로 바꾸지 않는다 — 서버도 회색조 배열만 있으면 되고, 그래야 양쪽 다 가볍다.
+ */
+async function askTurnServer(gray, w, h) {
+  const base = state.apiUrl.replace(/\/+$/, '');
+  const res = await fetch(`${base}/turn?w=${w}&h=${h}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...(state.apiToken ? { 'X-Token': state.apiToken } : {}),
+    },
+    body: gray,
+    // 다음 차례(700ms)가 밀리지 않게 넉넉하되 짧게 끊는다
+    signal: AbortSignal.timeout(1500),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = await res.json();
+  return json && typeof json.value === 'number' ? json.value : null;
+}
 
 /**
  * 인식 엔진은 메인 프로세스에 있다.
@@ -376,18 +404,35 @@ async function ocrTick() {
   ocrBusy = true;
   const gen = autoGen;
   try {
-    // ① 턴 숫자 전용 인식기 — 여기서 끝나면 워커도 IPC도 안 탄다
-    const direct = readTurn(frame.gray, frame.w, frame.h, TURN_TEMPLATES);
-    if (direct) {
-      ocrMisses = 0;
-      state.everRead = true;
-      applyRecognizedTurn(direct.value);
-      return;
+    let turn = null;
+
+    // ① 서버를 지정해 뒀으면 거기에 먼저 물어본다.
+    //    서버 쪽 인식기를 고치면 exe를 다시 안 뿌려도 좋아진다.
+    if (state.apiUrl) {
+      try {
+        turn = await askTurnServer(frame.gray, frame.w, frame.h);
+        serverDown = false;
+      } catch (e) {
+        // 망이 끊겨도 게임은 계속된다 — 조용히 앱 안 인식기로 내려간다
+        if (!serverDown) {
+          serverDown = true;
+          setOcrStatus(`서버에 못 붙었어요 (${e.message}) — 앱 안에서 읽습니다`, 'err');
+        }
+      }
     }
 
-    // ② 전용 인식기가 "모르겠다"고 하면 범용 OCR로 한 번 더 본다.
+    // ② 앱 안의 턴 숫자 전용 인식기 — 여기서 끝나면 워커도 IPC도 안 탄다
+    if (turn === null) {
+      const direct = readTurn(frame.gray, frame.w, frame.h, TURN_TEMPLATES);
+      if (direct) turn = direct.value;
+    }
+
+    // ③ 서버도 전용 인식기도 모르겠다면, 서버를 안 쓸 때만 범용 OCR로 한 번 더 본다.
     //    (게임 폰트가 대조표와 많이 다를 때를 위한 보험)
-    const turn = await ipcRenderer.invoke('ocr:recognize', frame.canvas.toDataURL('image/png'));
+    if (turn === null && !state.apiUrl) {
+      turn = await ipcRenderer.invoke('ocr:recognize', frame.canvas.toDataURL('image/png'));
+    }
+
     // 기다리는 동안 자동이 꺼졌거나(수동 이동) 영역이 바뀌었으면 결과를 버린다
     if (!state.auto || gen !== autoGen) return;
     if (turn !== null) {
@@ -524,6 +569,12 @@ $('auto-toggle').addEventListener('change', (e) => toggleAuto(e.target.checked))
 $('opacity').addEventListener('input', (e) => {
   applyOpacity(Number(e.target.value));
   ipcRenderer.invoke('config:set', { opacity: Number(e.target.value) });
+});
+$('api-url').addEventListener('change', (e) => {
+  state.apiUrl = e.target.value.trim();
+  serverDown = false; // 주소를 고쳤으면 다시 시도해 본다
+  ipcRenderer.invoke('config:set', { turnApiUrl: state.apiUrl });
+  setOcrStatus(state.apiUrl ? `턴 인식 서버: ${state.apiUrl}` : '앱 안에서 읽습니다', '');
 });
 $('btn-close').addEventListener('click', () => window.close());
 $('btn-min').addEventListener('click', () => {

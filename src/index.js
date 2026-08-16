@@ -11,6 +11,7 @@ const {
 } = require('discord.js');
 const voice = require('./voiceTime');
 const reader = require('./tts/reader');
+const turnApi = require('./turnApi');
 
 /** 메시지 내용 없이도 돌아가는 최소 인텐트 */
 const BASE_INTENTS = [
@@ -112,6 +113,10 @@ function isDisallowedIntents(error) {
 }
 
 let current = null;
+
+// 오버레이가 쓰는 턴 인식 API — TURN_API_PORT(또는 PORT)가 있을 때만 뜬다.
+// 봇과 한 프로세스에서 도는 게 이상해 보일 수 있지만, 무료 플랜은 인스턴스가 하나뿐이다.
+turnApi.start();
 
 async function login(intents, withContent) {
   const client = createClient(intents);

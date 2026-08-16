@@ -8,7 +8,7 @@
     "deploy": "node src/deploy-commands.js",
     "notion:dump": "node src/dump-notion.js",
     "release": "node scripts/release.js",
-    "test": "node test/builds.test.js && node test/notion.test.js && node test/voice.test.js && node test/tts.test.js"
+    "test": "node test/builds.test.js && node test/notion.test.js && node test/voice.test.js && node test/tts.test.js && node test/turnApi.test.js"
   },
   "engines": {
     "node": ">=18"

@@ -92,6 +92,18 @@ body {
 /* 색을 안 잡아 주면 윈도우에서 시스템 색(검정)이 나와 어두운 배경에 묻힌다 */
 #build-select option { background: #1a1c26; color: #eee; }
 
+#api-row { margin-top: 4px; }
+#api-url {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #cfd6e4;
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+#api-url::placeholder { color: #667; }
+
 /* ── 변형(분기) 선택 */
 #variants { display: flex; gap: 4px; flex-wrap: wrap; }
 #variants button {

@@ -177,7 +177,24 @@ TTS_BODY={"text":"{{text}}","format":"ogg_opus"}
   - 정리는 **`npm run clean`** (`-- --keep dist4` 처럼 하나만 남길 수 있다). 백신이 갓 만든
     `app.asar`를 붙들고 있으면 `rm -rf`는 그 하나 때문에 통째로 실패한다 — 이 스크립트는
     지울 수 있는 것부터 지우고 남은 것만 알려준다.
-- **턴 인식은 메인 프로세스에서 돈다.** `nodeIntegration`이 켜져 있어 tesseract가 Node 빌드를
+**턴 인식**
+
+- **전용 인식기**(`overlay/lib/turnReader.js`)가 기본이다. 0~9만 가른다 —
+  이진화(Otsu) → 덩어리 나누기 → 크기 정규화 → 템플릿 대조. 의존성이 없다.
+  문턱값은 재서 골랐다: **2등과의 점수 차 0.04** 이하면 답하지 않는다.
+  처음 보는 폰트 60개에서 맞음 49·모르겠음 11·**틀림 0**. 틀리게 읽는 것이 훨씬 나쁘다.
+  대조표는 `cd overlay && npm run templates`로 다시 뽑는다.
+- **턴 인식 API**(`src/turnApi.js`)를 봇과 같이 띄울 수 있다. `TURN_API_PORT`(또는 `PORT`)가
+  있을 때만 뜬다. 오버레이 창에 서버 주소를 넣으면 그쪽에 먼저 물어보고, 못 붙으면 앱 안에서 읽는다.
+  서버 쪽을 고치면 exe·APK를 다시 안 뿌려도 좋아진다.
+  - `POST /turn?w=&h=` 본문은 **회색조 픽셀 그대로**(w*h 바이트). 이미지로 안 바꾼다 —
+    서버에 이미지 라이브러리가 필요 없어진다.
+  - `TURN_API_TOKEN`을 넣으면 `X-Token` 헤더를 확인한다. HTTP 헤더라 **아스키만** 된다.
+  - 인식기는 `overlay/lib/`에 둔 채로 봇이 require 한다. **밖으로 옮기지 말 것** —
+    옮기면 electron-builder가 exe에 안 넣는다.
+- **범용 OCR(tesseract)은 보험으로만 남아 있다.** 서버를 안 쓸 때, 전용 인식기가
+  모르겠다고 할 때만 부른다.
+- **그 tesseract는 메인 프로세스에서 돈다.** `nodeIntegration`이 켜져 있어 tesseract가 Node 빌드를
   고르는데, Electron 렌더러는 Node 워커(`worker_threads`)를 지원하지 않아 렌더러에서 띄우면
   "does not support creating Workers"로 죽는다. 캡처·전처리만 렌더러(캔버스 필요)에 두고
   인식은 `ocr:recognize` IPC로 넘긴다 — **렌더러로 되돌리지 말 것.**
