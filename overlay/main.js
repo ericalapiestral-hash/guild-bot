@@ -221,6 +221,29 @@ function setClickThrough(v) {
 
 // ─────────────────────────────── OCR 영역 선택
 
+/**
+ * 영역 선택 중에만 ESC를 전역으로 잡는다.
+ * 게임에 포커스가 있는 채로 창을 띄우면 윈도우가 포커스를 안 넘겨줘서 keydown이 오지 않는다.
+ * 창 안에서 한 번 클릭하면 그때부터 오지만, 그 전에도 빠져나갈 수 있어야 한다.
+ */
+let escGrabbed = false;
+
+function grabEscape() {
+  if (escGrabbed) return;
+  escGrabbed = globalShortcut.register('Escape', () => closePicker());
+}
+
+function releaseEscape() {
+  if (!escGrabbed) return;
+  globalShortcut.unregister('Escape');
+  escGrabbed = false;
+}
+
+function closePicker() {
+  releaseEscape();
+  if (pickerWin && !pickerWin.isDestroyed()) pickerWin.close();
+}
+
 function openPicker() {
   if (pickerWin && !pickerWin.isDestroyed()) {
     pickerWin.focus();
@@ -245,10 +268,17 @@ function openPicker() {
   pickerWin.setAlwaysOnTop(true, 'screen-saver');
   pickerWin.loadFile(path.join(__dirname, 'renderer', 'picker.html'));
   pickerWin.webContents.once('did-finish-load', () => {
+    if (!pickerWin || pickerWin.isDestroyed()) return;
     pickerWin.webContents.send('picker:init', { displayId: display.id });
+    // 게임에서 포커스를 뺏어 와야 창 안의 ESC가 동작한다
+    pickerWin.show();
+    pickerWin.focus();
+    pickerWin.webContents.focus();
   });
+  grabEscape(); // 포커스를 못 가져온 경우를 대비한 안전줄
   pickerWin.on('closed', () => {
     pickerWin = null;
+    releaseEscape();
   });
 }
 
@@ -290,15 +320,13 @@ ipcMain.handle('picker:open', () => openPicker());
 ipcMain.on('picker:done', (_e, region) => {
   // region: { displayId, fx, fy, fw, fh } — 화면 대비 비율(0~1)이라 해상도가 바뀌어도 안전
   saveConfig({ ocrRegion: region });
-  if (pickerWin && !pickerWin.isDestroyed()) pickerWin.close();
+  closePicker();
   if (overlayWin && !overlayWin.isDestroyed()) {
     overlayWin.webContents.send('ocr:region', region);
   }
 });
 
-ipcMain.on('picker:cancel', () => {
-  if (pickerWin && !pickerWin.isDestroyed()) pickerWin.close();
-});
+ipcMain.on('picker:cancel', () => closePicker());
 
 /** OCR 캡처에 쓸 화면 소스 ID — 영역을 고른 디스플레이와 짝을 맞춘다 */
 ipcMain.handle('capture:source-for-display', async (_e, displayId) => {

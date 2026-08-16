@@ -58,3 +58,9 @@ document.addEventListener('mouseup', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') ipcRenderer.send('picker:cancel');
 });
+
+// 게임에 포커스가 남아 있으면 키가 안 들어온다 — 손이 이미 마우스에 있으니 우클릭으로도 나갈 수 있게
+document.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  ipcRenderer.send('picker:cancel');
+});

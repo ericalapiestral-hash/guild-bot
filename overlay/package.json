@@ -24,6 +24,12 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "**/*",
+      "!dist${/*}",
+      "!dist-*${/*}",
+      "!test${/*}"
+    ],
     "extraResources": [
       {
         "from": "../data",
