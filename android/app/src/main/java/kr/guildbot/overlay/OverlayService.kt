@@ -41,6 +41,13 @@ class OverlayService : Service() {
         private const val CHANNEL_ID = "overlay"
         private const val NOTIF_ID = 1
 
+        /** 이 횟수만큼 연속으로 못 읽으면 "연출/라운드 전환으로 잠깐 가려진 것"으로 본다 (약 2초) */
+        private const val GAP_TICKS = 3
+        /** 한 번도 못 읽었을 때 — 턴 위치가 틀렸을 가능성이 크다 (약 5.6초) */
+        private const val LOST_TICKS_FIRST = 8
+        /** 읽다가 오래 끊겼을 때 — 창이 숫자를 가렸거나 화면이 바뀐 것 (약 14초) */
+        private const val LOST_TICKS_AFTER = 20
+
         /** 앱 화면에서 "실행 중"을 보여 주기 위한 표시 */
         @Volatile
         var running: Boolean = false
@@ -67,6 +74,11 @@ class OverlayService : Service() {
     private var collapsed = false
     private var lastTurn: Int? = null
     private var pendingTurn: Int? = null
+    /** 턴 표시가 사라졌다 돌아오는 중 — 라운드가 넘어갔을 수 있다 */
+    private var sawGap = false
+    /** 자동을 켠 뒤 한 번이라도 숫자를 읽었는지 */
+    private var everRead = false
+    private var ocrMisses = 0
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -286,6 +298,7 @@ class OverlayService : Service() {
                 index = 0
                 lastTurn = null
                 pendingTurn = null
+                sawGap = false
                 steps = found?.let { Steps.flatten(it.groups, picks) } ?: emptyList()
                 binding.title.text = found?.name ?: getString(R.string.overlay_title)
                 renderVariants()
@@ -444,10 +457,12 @@ class OverlayService : Service() {
         // API 34부터는 mediaProjection 종류로 올라간 뒤에야 화면을 가져올 수 있다
         goForeground(capturing = true)
         stopCapture()
+        ocrMisses = 0
+        sawGap = false
+        everRead = false
         capture = TurnCapture(
             context = this,
-            onTurn = { turn -> applyRecognizedTurn(turn) },
-            onMiss = { status("숫자를 못 읽고 있어요 — 턴 위치를 다시 지정해보세요", warn = true) },
+            onResult = { turn -> handleOcrResult(turn) },
             onError = { message ->
                 auto = false
                 markAutoButton()
@@ -465,23 +480,61 @@ class OverlayService : Service() {
         capture = null
         lastTurn = null
         pendingTurn = null
+        sawGap = false
+    }
+
+    /**
+     * 한 번 읽을 때마다 부른다.
+     * 게임이 스킬 연출·라운드 전환 동안 턴 숫자를 감추는데, 그건 오류가 아니라 정상이다.
+     * 진행 위치를 그대로 두고, 돌아왔을 때 라운드가 넘어갔는지 따져 보게 표시만 남긴다.
+     */
+    private fun handleOcrResult(turn: Int?) {
+        if (!auto) return
+        if (turn != null) {
+            ocrMisses = 0
+            everRead = true
+            applyRecognizedTurn(turn)
+            return
+        }
+
+        ocrMisses += 1
+        if (ocrMisses == GAP_TICKS) {
+            sawGap = true
+            pendingTurn = null // 사라지기 전 값이 남아 확인 한 번을 건너뛰지 않게
+            if (everRead) {
+                status("턴 표시 없음 (연출 중) — ${lastTurn ?: "?"}턴에서 대기", warn = false)
+            }
+        }
+        val limit = if (everRead) LOST_TICKS_AFTER else LOST_TICKS_FIRST
+        if (ocrMisses == limit) {
+            status(
+                if (everRead) "한참 턴을 못 읽고 있어요 — 창이 숫자를 가리진 않았는지 보세요"
+                else "숫자를 못 읽고 있어요 — 턴 위치를 다시 지정해보세요",
+                warn = true,
+            )
+        }
     }
 
     /** 오인식 방어 — 같은 값이 두 번 연속으로 읽혀야 반영한다 (PC판과 같은 규칙) */
     private fun applyRecognizedTurn(t: Int) {
-        if (!auto) return
         if (t < 0 || t > 999) return
         if (pendingTurn != t) {
             pendingTurn = t
             return
         }
-        if (lastTurn == t) return
+        // 사라졌다 돌아온 직후라면 같은 값이어도 다시 따져 본다 — 라운드가 넘어갔을 수 있다.
+        // (라운드마다 0으로 리셋되는 빌드는 0 → 0이라 이걸 안 하면 그 라운드에 갇힌다)
+        val afterGap = sawGap
+        if (lastTurn == t && !afterGap) return
+        sawGap = false
         lastTurn = t
 
         binding.turnBadge.text = "턴 $t"
         status("인식 중 — ${t}턴", warn = false)
 
-        val next = Steps.nextIndexForTurn(steps, index, t)
+        val next =
+            if (afterGap) Steps.nextIndexAfterGap(steps, index, t)
+            else Steps.nextIndexForTurn(steps, index, t)
         if (next != index) {
             index = next
             renderSteps()

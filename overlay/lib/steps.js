@@ -180,9 +180,48 @@ function nextIndexForTurn(steps, cur, t) {
   return last; // 전부 지났다 — 마지막 단계 유지
 }
 
+/**
+ * 턴 표시가 한동안 사라졌다가 돌아왔을 때의 다음 단계.
+ *
+ * 게임은 스킬 연출과 라운드 전환 동안 턴 숫자를 감춘다. 라운드마다 턴이 0부터 다시
+ * 시작하는 빌드에서는 돌아온 숫자가 직전과 같아서(0 → 0) 평소 규칙으로는 제자리에
+ * 머물고, 라운드가 넘어간 걸 영영 못 따라간다.
+ *
+ * 그래서 "사라졌다 돌아왔는데 앞으로 못 갔고, 게다가 지금이 이 라운드의 마지막 단계"면
+ * 다음 라운드로 넘긴다. 라운드에 아직 할 게 남아 있으면 스킬 연출이 지나간 것뿐이므로
+ * 건드리지 않는다 — 이 조건이 없으면 연출 때마다 라운드를 건너뛴다.
+ *
+ * @returns {number} 다음 단계 인덱스
+ */
+function nextIndexAfterGap(steps, cur, t) {
+  if (!Array.isArray(steps) || steps.length === 0) return 0;
+  const last = steps.length - 1;
+  cur = Math.max(0, Math.min(cur ?? 0, last));
+
+  const normal = nextIndexForTurn(steps, cur, t);
+  if (normal !== cur) return normal; // 숫자가 올라가서 이미 앞으로 갔다
+
+  const ranges = segmentRanges(steps);
+  const curSeg = Math.max(
+    0,
+    ranges.findIndex(([a, b]) => cur >= a && cur <= b),
+  );
+  if (cur !== ranges[curSeg][1]) return normal; // 이 라운드에 아직 남은 단계가 있다
+
+  const nextSeg = ranges[curSeg + 1];
+  return nextSeg ? nextSeg[0] : normal; // 마지막 라운드면 그대로 둔다
+}
+
 /** 처음 켰을 때(현재 위치가 없을 때)의 시작 단계 */
 function indexForTurn(steps, t) {
   return nextIndexForTurn(steps, 0, t);
 }
 
-module.exports = { parseSteps, groupVariants, flatten, indexForTurn, nextIndexForTurn };
+module.exports = {
+  parseSteps,
+  groupVariants,
+  flatten,
+  indexForTurn,
+  nextIndexForTurn,
+  nextIndexAfterGap,
+};

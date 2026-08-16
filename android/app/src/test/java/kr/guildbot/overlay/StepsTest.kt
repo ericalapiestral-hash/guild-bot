@@ -161,6 +161,51 @@ class StepsTest {
         assertEquals(3, Steps.nextIndexForTurn(flow, 3, 5))
     }
 
+    // ─── 턴 표시가 사라졌다 돌아오는 경우 (스킬 연출 · 라운드 전환)
+
+    @Test
+    fun `턴이 사라졌다 같은 값으로 돌아오면 다음 라운드로 넘어간다`() {
+        // reset = [R1:0] [R2:0] [R3:0,4,8] — 라운드마다 0으로 리셋되는 빌드
+        assertEquals("R1 0턴 → R2 0턴", 1, Steps.nextIndexAfterGap(reset, 0, 0))
+        assertEquals("R2 0턴 → R3 0턴", 2, Steps.nextIndexAfterGap(reset, 1, 0))
+    }
+
+    @Test
+    fun `라운드에 남은 단계가 있으면 연출로 보고 제자리를 지킨다`() {
+        // R3의 첫 단계(0턴)에서 잠깐 사라진 것 — 뒤에 4턴·8턴이 남아 있다
+        assertEquals(2, Steps.nextIndexAfterGap(reset, 2, 0))
+    }
+
+    @Test
+    fun `사라진 사이에 턴이 올라갔으면 평소대로 따라간다`() {
+        assertEquals(3, Steps.nextIndexAfterGap(reset, 2, 3))
+        assertEquals(1, Steps.nextIndexAfterGap(flow, 0, 4))
+    }
+
+    @Test
+    fun `마지막 라운드에서는 넘길 곳이 없으니 그대로 둔다`() {
+        val last = reset.size - 1
+        assertEquals(last, Steps.nextIndexAfterGap(reset, last, 8))
+    }
+
+    @Test
+    fun `전역 카운터 빌드도 라운드 끝에서 같은 턴이 돌아오면 다음 라운드로`() {
+        // flow = [1라: 0, 4] [2라(4턴): 4, 8]
+        assertEquals(2, Steps.nextIndexAfterGap(flow, 1, 4))
+        // 라운드 중간에서는 건드리지 않는다
+        assertEquals(0, Steps.nextIndexAfterGap(flow, 0, 0))
+    }
+
+    @Test
+    fun `빈 목록과 범위 밖 인덱스에도 안전하다`() {
+        assertEquals(0, Steps.nextIndexAfterGap(emptyList(), 0, 5))
+        // 범위 밖 인덱스는 마지막으로 보정되고, 그다음은 평소 규칙을 그대로 탄다
+        assertEquals(
+            Steps.nextIndexForTurn(reset, reset.size - 1, 0),
+            Steps.nextIndexAfterGap(reset, 999, 0),
+        )
+    }
+
     @Test
     fun `각주의 턴 마커는 단계로 넣지 않는다`() {
         val noted = Steps.parseSteps(

@@ -24,17 +24,17 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 class TurnCapture(
     private val context: Context,
-    private val onTurn: (Int) -> Unit,
-    /** 한동안 숫자를 하나도 못 읽었을 때 한 번만 부른다 */
-    private val onMiss: () -> Unit,
+    /**
+     * 한 번 읽을 때마다 부른다. 못 읽었으면 null —
+     * 연출로 잠깐 가려진 것인지 판단하는 건 [OverlayService] 쪽 일이다.
+     */
+    private val onResult: (Int?) -> Unit,
     private val onError: (String) -> Unit,
 ) {
 
     private companion object {
         /** PC판과 같은 주기 */
         const val INTERVAL_MS = 700L
-        /** 5초 넘게 못 읽으면 엉뚱한 곳을 보고 있을 가능성이 크다 */
-        const val MISS_LIMIT = 8
         val DIGITS = Regex("\\d{1,3}")
     }
 
@@ -53,8 +53,6 @@ class TurnCapture(
 
     private var region: TurnRegion? = null
     private var busy = false
-    private var misses = 0
-    private var missReported = false
 
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
@@ -89,8 +87,6 @@ class TurnCapture(
             createDisplay()
 
             isRunning = true
-            misses = 0
-            missReported = false
             worker?.postDelayed(tick, INTERVAL_MS)
             true
         } catch (e: Exception) {
@@ -102,8 +98,6 @@ class TurnCapture(
 
     fun updateRegion(region: TurnRegion) {
         this.region = region
-        misses = 0
-        missReported = false
     }
 
     /** 화면 방향이 바뀌면 미러링 크기가 안 맞는다 — 가상 디스플레이만 다시 만든다 */
@@ -202,17 +196,7 @@ class TurnCapture(
         recognizer.process(InputImage.fromBitmap(prepared, 0))
             .addOnSuccessListener { text ->
                 val found = DIGITS.find(text.text)?.value?.toIntOrNull()
-                if (found != null) {
-                    misses = 0
-                    missReported = false
-                    main.post { onTurn(found) }
-                } else {
-                    misses += 1
-                    if (misses >= MISS_LIMIT && !missReported) {
-                        missReported = true
-                        main.post { onMiss() }
-                    }
-                }
+                main.post { onResult(found) }
             }
             .addOnCompleteListener {
                 busy = false

@@ -2,7 +2,14 @@
 'use strict';
 
 const { ipcRenderer } = require('electron');
-const { flatten, nextIndexForTurn } = require('../lib/steps');
+const { flatten, nextIndexForTurn, nextIndexAfterGap } = require('../lib/steps');
+
+/** 이 횟수만큼 연속으로 못 읽으면 "연출/라운드 전환으로 잠깐 가려진 것"으로 본다 (약 2초) */
+const GAP_TICKS = 3;
+/** 한 번도 못 읽었을 때 — 턴 위치가 틀렸을 가능성이 크다 (약 5.6초) */
+const LOST_TICKS_FIRST = 8;
+/** 읽다가 오래 끊겼을 때 — 창이 숫자를 가렸거나 화면이 바뀐 것 (약 14초) */
+const LOST_TICKS_AFTER = 20;
 
 // ─────────────────────────────── 상태
 
@@ -17,6 +24,8 @@ const state = {
   region: null, // { displayId, fx, fy, fw, fh }
   lastTurn: null,
   pendingTurn: null, // 같은 값이 두 번 연속 읽혀야 반영 (오인식 방어)
+  sawGap: false, // 턴 표시가 사라졌다 돌아오는 중 — 라운드가 넘어갔을 수 있다
+  everRead: false, // 자동을 켠 뒤 한 번이라도 숫자를 읽었는지
 };
 
 const $ = (id) => document.getElementById(id);
@@ -43,6 +52,7 @@ async function loadBuilds({ firstRun = false } = {}) {
       state.index = Math.min(state.index, Math.max(0, state.steps.length - 1));
       state.lastTurn = null; // 다음 인식 때 다시 맞춘다
       state.pendingTurn = null;
+      state.sawGap = false;
       renderVariants();
       renderSteps();
       renderBuildList();
@@ -159,6 +169,7 @@ function selectBuild(id, { save = true } = {}) {
   state.index = 0;
   state.lastTurn = null;
   state.pendingTurn = null;
+  state.sawGap = false;
   const build = currentBuild();
   if (build) {
     const select = $('build-select');
@@ -367,12 +378,27 @@ async function ocrTick() {
     if (!state.auto || gen !== autoGen) return;
     if (turn !== null) {
       ocrMisses = 0;
+      state.everRead = true;
       applyRecognizedTurn(turn);
     } else {
       ocrMisses += 1;
-      if (ocrMisses === 8) {
-        // 5초 넘게 아무 숫자도 못 읽었다 — 엉뚱한 곳을 보고 있을 가능성이 크다
-        setOcrStatus('숫자를 못 읽고 있어요 — 턴 위치를 다시 지정해보세요', 'err');
+      // 게임이 스킬 연출·라운드 전환 동안 턴 숫자를 감춘다. 오류가 아니라 정상이므로
+      // 진행 위치를 그대로 두고, 돌아왔을 때 라운드가 넘어갔는지 따져 보게 표시만 남긴다.
+      if (ocrMisses === GAP_TICKS) {
+        state.sawGap = true;
+        state.pendingTurn = null; // 사라지기 전 값이 남아 확인 한 번을 건너뛰지 않게
+        if (state.everRead) {
+          setOcrStatus(`턴 표시 없음 (연출 중) — ${state.lastTurn ?? '?'}턴에서 대기`, '');
+        }
+      }
+      const limit = state.everRead ? LOST_TICKS_AFTER : LOST_TICKS_FIRST;
+      if (ocrMisses === limit) {
+        setOcrStatus(
+          state.everRead
+            ? '한참 턴을 못 읽고 있어요 — 오버레이 창이 숫자를 가리진 않았는지 보세요'
+            : '숫자를 못 읽고 있어요 — 턴 위치를 다시 지정해보세요',
+          'err',
+        );
       }
     }
   } catch (e) {
@@ -390,12 +416,18 @@ function applyRecognizedTurn(t) {
     state.pendingTurn = t;
     return;
   }
-  if (state.lastTurn === t) return;
+  // 사라졌다 돌아온 직후라면 같은 값이어도 다시 따져 본다 — 라운드가 넘어갔을 수 있다.
+  // (라운드마다 0으로 리셋되는 빌드는 0 → 0이라 이걸 안 하면 그 라운드에 갇힌다)
+  const afterGap = state.sawGap;
+  if (state.lastTurn === t && !afterGap) return;
+  state.sawGap = false;
   state.lastTurn = t;
   $('turn-badge').textContent = `턴 ${t}`;
   setOcrStatus(`인식 중 — ${t}턴`, 'on');
 
-  const next = nextIndexForTurn(state.steps, state.index, t);
+  const next = afterGap
+    ? nextIndexAfterGap(state.steps, state.index, t)
+    : nextIndexForTurn(state.steps, state.index, t);
   if (next !== state.index) {
     state.index = next;
     renderSteps();
@@ -420,6 +452,8 @@ async function toggleAuto(on) {
     }
     state.pendingTurn = null;
     state.lastTurn = null;
+    state.sawGap = false;
+    state.everRead = false;
     ocrMisses = 0;
     if (ocrTimer) clearInterval(ocrTimer);
     ocrTimer = setInterval(ocrTick, 700);
