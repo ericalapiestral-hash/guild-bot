@@ -121,6 +121,49 @@ function findApk() {
   return candidates[0].full;
 }
 
+/**
+ * CI가 릴리스에 올려 둔 최신 APK. 로그인 없이 받을 수 있는 고정 주소다.
+ * (exe는 도감 스냅샷이 들어 있어 릴리스에 올리지 않는다 — APK만 있다)
+ */
+const APK_URL =
+  'https://github.com/ericalapiestral-hash/guild-bot/releases/latest/download/guild-overlay-android.apk';
+
+async function downloadApk(dest) {
+  const res = await fetch(APK_URL);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.length < 1024) throw new Error('받은 파일이 너무 작습니다');
+  fs.writeFileSync(dest, bytes);
+  return bytes.length;
+}
+
+/** 지정 → 릴리스에서 내려받기 → 받아 둔 파일 순으로 APK를 구한다 */
+async function resolveApk(dest) {
+  const given = flag('--apk');
+  if (typeof given === 'string') {
+    if (!fs.existsSync(given)) throw new Error(`APK를 못 찾았습니다: ${given}`);
+    fs.copyFileSync(given, dest);
+    return given;
+  }
+
+  if (!args.includes('--no-download')) {
+    console.log('  최신 APK 내려받는 중…');
+    try {
+      const size = await downloadApk(dest);
+      console.log(`  ✓ 릴리스에서 받음 (${mb(size)})`);
+      return APK_URL;
+    } catch (e) {
+      console.log(`  △ 내려받기 실패 (${e.message}) — 받아 둔 파일을 찾아봅니다`);
+    }
+  }
+
+  const local = findApk();
+  if (!local) return null;
+  fs.copyFileSync(local, dest);
+  console.log(`  ✓ ${local}`);
+  return local;
+}
+
 function gitInfo() {
   try {
     const hash = execSync('git rev-parse --short HEAD', { cwd: ROOT }).toString().trim();
@@ -133,70 +176,81 @@ function gitInfo() {
 
 // ─────────────────────────────── 진행
 
-fs.mkdirSync(OUT, { recursive: true });
+async function main() {
+  fs.mkdirSync(OUT, { recursive: true });
 
-console.log('[0/3] release/ 비우는 중…');
-const locked = sweep(OUT, skipExe ? [EXE_NAME] : []);
-if (locked.length > 0) {
-  console.log(`  △ ${locked.length}개가 잠겨 있습니다 (백신 검사 중이거나 실행 중):`);
-  for (const f of locked) console.log(`    ${path.relative(ROOT, f)}`);
-  console.log('  덮어쓰기를 시도합니다.');
-}
-
-const placed = [];
-
-if (skipExe) {
-  console.log('\n[1/3] exe 빌드 건너뜀 (--skip-exe) — 이미 있는 건 그대로 둡니다');
-  const kept = path.join(OUT, EXE_NAME);
-  if (fs.existsSync(kept)) {
-    placed.push({ name: EXE_NAME, size: fs.statSync(kept).size, from: '(그대로)' });
+  console.log('[0/3] release/ 비우는 중…');
+  const locked = sweep(OUT, skipExe ? [EXE_NAME] : []);
+  if (locked.length > 0) {
+    console.log(`  △ ${locked.length}개가 잠겨 있습니다 (백신 검사 중이거나 실행 중):`);
+    for (const f of locked) console.log(`    ${path.relative(ROOT, f)}`);
+    console.log('  덮어쓰기를 시도합니다.');
   }
-} else {
-  const exe = buildExe();
-  const dest = path.join(OUT, EXE_NAME);
-  fs.copyFileSync(exe, dest);
-  placed.push({ name: EXE_NAME, size: fs.statSync(dest).size, from: path.relative(ROOT, exe) });
+
+  const placed = [];
+
+  if (skipExe) {
+    console.log('\n[1/3] exe 빌드 건너뜀 (--skip-exe) — 이미 있는 건 그대로 둡니다');
+    const kept = path.join(OUT, EXE_NAME);
+    if (fs.existsSync(kept)) {
+      placed.push({ name: EXE_NAME, size: fs.statSync(kept).size });
+    }
+  } else {
+    const exe = buildExe();
+    const dest = path.join(OUT, EXE_NAME);
+    fs.copyFileSync(exe, dest);
+    placed.push({ name: EXE_NAME, size: fs.statSync(dest).size });
+  }
+
+  console.log('\n[2/3] APK 챙기는 중…');
+  const apkDest = path.join(OUT, APK_NAME);
+  const apkFrom = await resolveApk(apkDest);
+  if (apkFrom) {
+    placed.push({ name: APK_NAME, size: fs.statSync(apkDest).size });
+  } else {
+    console.log(
+      '  △ APK를 못 구했습니다.\n' +
+        '    Actions → "안드로이드 APK 빌드"가 한 번 돌아야 릴리스에 올라갑니다.\n' +
+        '    받아 둔 apk가 있으면 다운로드 폴더나 release-src/ 에 두고 다시 실행하세요.\n' +
+        '    (또는  npm run release -- --apk "경로")',
+    );
+  }
+
+  console.log('\n[3/3] 버전 기록…');
+  writeNotes(placed);
+
+  console.log('\n─────────────────────────────');
+  console.log(`release/ 준비 완료 (${gitInfo().hash})`);
+  for (const p of placed) console.log(`  ${p.name.padEnd(28)} ${mb(p.size)}`);
+  if (placed.length === 0) console.log('  (넣은 게 없습니다)');
+  console.log(`\n${OUT}`);
 }
 
-console.log('\n[2/3] APK 찾는 중…');
-const apk = findApk();
-if (apk) {
-  const dest = path.join(OUT, APK_NAME);
-  fs.copyFileSync(apk, dest);
-  placed.push({ name: APK_NAME, size: fs.statSync(dest).size, from: apk });
-  console.log(`  ✓ ${apk}`);
-} else {
-  console.log(
-    '  △ APK를 못 찾았습니다. APK는 GitHub Actions에서만 만들어집니다:\n' +
-      '    Actions → "안드로이드 APK 빌드" → 최근 실행 → Artifacts → build-overlay-debug-apk\n' +
-      '    받은 apk를 다운로드 폴더에 두거나 release-src/ 에 넣고 다시 실행하세요.\n' +
-      '    (또는  npm run release -- --apk "경로")',
-  );
+function writeNotes(placed) {
+  const { hash, subject } = gitInfo();
+  const stamp = new Date().toLocaleString('ko-KR');
+  const notes = [
+    '길드 빌드 오버레이',
+    '',
+    `만든 때 : ${stamp}`,
+    `커밋    : ${hash}`,
+    subject ? `내용    : ${subject}` : null,
+    '',
+    ...placed.map((p) => `${p.name}  ${mb(p.size)}`),
+    placed.length === 2 ? null : '(둘 중 하나만 들어 있습니다)',
+    '',
+    'PC  : exe를 그냥 실행하면 됩니다. 설치 필요 없음.',
+    '      도감을 바꾸려면 exe 옆에 data/builds.json 을 두세요.',
+    '      ※ 이 exe 안에는 길드 도감이 들어 있습니다. 길드 밖으로 돌리지 마세요.',
+    '폰  : apk를 옮겨 설치. "출처를 알 수 없는 앱" 허용이 한 번 필요합니다.',
+    '      apk에는 도감이 안 들어 있어 앱에서 따로 불러와야 합니다.',
+  ]
+    .filter((line) => line !== null)
+    .join('\n');
+  fs.writeFileSync(path.join(OUT, '버전.txt'), `${notes}\n`, 'utf8');
 }
 
-console.log('\n[3/3] 버전 기록…');
-const { hash, subject } = gitInfo();
-const stamp = new Date().toLocaleString('ko-KR');
-const notes = [
-  '길드 빌드 오버레이',
-  '',
-  `만든 때 : ${stamp}`,
-  `커밋    : ${hash}`,
-  subject ? `내용    : ${subject}` : null,
-  '',
-  ...placed.map((p) => `${p.name}  ${mb(p.size)}`),
-  placed.length === 2 ? null : '(둘 중 하나만 들어 있습니다)',
-  '',
-  'PC  : exe를 그냥 실행하면 됩니다. 설치 필요 없음.',
-  '      도감을 바꾸려면 exe 옆에 data/builds.json 을 두세요.',
-  '폰  : apk를 옮겨 설치. "출처를 알 수 없는 앱" 허용이 한 번 필요합니다.',
-]
-  .filter((line) => line !== null)
-  .join('\n');
-fs.writeFileSync(path.join(OUT, '버전.txt'), `${notes}\n`, 'utf8');
-
-console.log('\n─────────────────────────────');
-console.log(`release/ 준비 완료 (${hash})`);
-for (const p of placed) console.log(`  ${p.name.padEnd(28)} ${mb(p.size)}`);
-if (placed.length === 0) console.log('  (넣은 게 없습니다)');
-console.log(`\n${path.join(ROOT, 'release')}`);
+main().catch((e) => {
+  console.error(`\n실패: ${e.message}`);
+  process.exitCode = 1;
+});

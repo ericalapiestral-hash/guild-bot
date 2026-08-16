@@ -10,13 +10,18 @@ PC판과 **같은 파서**를 쓴다 — `overlay/lib/steps.js`를 `Steps.kt`로
 
 로컬에 Android SDK를 깔지 않아도 된다. **GitHub Actions가 빌드해 준다.**
 
-1. 저장소 → **Actions** → `안드로이드 APK 빌드` → 최근 실행
-2. 아래 **Artifacts** 의 `build-overlay-debug-apk` 내려받기 (zip)
-3. 압축 풀어 나온 `app-debug.apk`를 폰으로 옮겨 설치
-   (설치할 때 "출처를 알 수 없는 앱" 허용이 한 번 필요하다)
+main에 올라갈 때마다 `latest` 릴리스가 갱신된다. 로그인 없이 이 주소에서 바로 받는다:
 
-`android/` 아래를 고쳐 푸시하면 자동으로 다시 빌드된다. 손으로 돌리려면 Actions에서
-**Run workflow**.
+<https://github.com/ericalapiestral-hash/guild-bot/releases/latest/download/guild-overlay-android.apk>
+
+폰으로 옮겨 설치하면 된다 (설치할 때 "출처를 알 수 없는 앱" 허용이 한 번 필요하다).
+저장소 루트에서 `npm run release`를 돌리면 이 파일을 `release/`로 받아 온다.
+
+빌드 중간 결과가 필요하면 Actions → `안드로이드 APK 빌드` → 최근 실행 → **Artifacts**
+(이쪽은 GitHub 로그인이 필요하고 90일 뒤 사라진다). 손으로 돌리려면 **Run workflow**.
+
+> PC용 exe는 릴리스에 올리지 않는다 — 포장할 때 길드 도감이 같이 들어가기 때문이다.
+> APK에는 도감이 안 들어간다 (앱에서 직접 불러온다).
 
 ## 쓰는 법
 

@@ -36,11 +36,17 @@ release/
   버전.txt
 ```
 
-- **APK는 로컬에서 못 만든다** (Android SDK가 없다). GitHub Actions에서 받아
-  다운로드 폴더나 `release-src/`에 두면 스크립트가 알아서 집어 온다.
-  경로를 직접 주려면 `npm run release -- --apk "경로"`.
+- **APK는 로컬에서 못 만든다** (Android SDK가 없다). main에 올라갈 때마다 CI가
+  `latest` 릴리스에 올리고, 스크립트가 거기서 받아 온다 —
+  <https://github.com/ericalapiestral-hash/guild-bot/releases/latest/download/guild-overlay-android.apk>
+  받아 둔 파일을 쓰려면 다운로드 폴더나 `release-src/`에 두거나 `-- --apk "경로"`.
 - exe는 그대로 두고 APK만 갈아끼우려면 `npm run release -- --skip-exe`.
 - `release/`는 커밋하지 않는다 (산출물).
+
+> ⚠️ **exe는 릴리스에 올리지 않는다.** 포장할 때 `data/builds.json`(길드 도감)이
+> 같이 들어가기 때문에, 공개된 곳에 올리면 도감이 통째로 공개된다. 도감을
+> 커밋하지 않는 것과 같은 이유다. APK에는 도감이 안 들어가서 올려도 된다.
+> exe는 길드 안에서만 돌린다.
 
 ## 기능 · 슬래시 명령
 
