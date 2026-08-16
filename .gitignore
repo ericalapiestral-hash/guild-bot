@@ -13,9 +13,7 @@ data/voice.json
 # 오버레이 앱
 overlay/node_modules/
 overlay/.cache/
-overlay/dist/
-overlay/dist-*/
-overlay/dist2/
+overlay/dist*/
 *.exe
 
 # 안드로이드 앱 (APK는 GitHub Actions에서 만든다)

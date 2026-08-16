@@ -261,32 +261,20 @@ function nav(delta) {
 
 let media = null; // MediaStream
 let ocrTimer = null;
-let workerPromise = null; // tesseract 워커 (자동 첫 시작 때 만든다)
 let ocrBusy = false;
 /** toggleAuto가 비동기라 겹칠 수 있다 — 세대 번호로 늦게 도착한 이전 호출을 무효화한다 */
 let autoGen = 0;
 /** 연속으로 숫자를 못 읽은 횟수 (사용자에게 알려주기 위해) */
 let ocrMisses = 0;
 
+/**
+ * 인식 엔진은 메인 프로세스에 있다.
+ * tesseract는 Node 워커(worker_threads)를 만드는데 Electron 렌더러는 그걸 지원하지 않아
+ * 여기서 직접 띄우면 "does not support creating Workers"로 죽는다. 여기로 되돌리지 말 것.
+ */
 function ensureWorker() {
-  if (workerPromise) return workerPromise;
   setOcrStatus('인식 엔진 준비 중… (첫 실행은 다운로드 때문에 1분쯤 걸릴 수 있어요)', '');
-  workerPromise = (async () => {
-    const { createWorker } = require('tesseract.js');
-    // 언어 데이터는 한 번 받으면 여기 저장되어 다음부터는 오프라인으로 뜬다.
-    // 포장된 앱은 앱 폴더에 못 쓰므로 메인에서 쓸 수 있는 자리를 받아온다.
-    const cachePath = await ipcRenderer.invoke('paths:ocr-cache');
-    const w = await createWorker('eng', 1, { cachePath });
-    await w.setParameters({
-      tessedit_char_whitelist: '0123456789',
-      tessedit_pageseg_mode: '7', // 한 줄
-    });
-    return w;
-  })().catch((e) => {
-    workerPromise = null; // 실패하면 다음에 다시 시도할 수 있게
-    throw e;
-  });
-  return workerPromise;
+  return ipcRenderer.invoke('ocr:warmup');
 }
 
 async function startCapture() {
@@ -374,14 +362,12 @@ async function ocrTick() {
   ocrBusy = true;
   const gen = autoGen;
   try {
-    const w = await ensureWorker();
-    const { data } = await w.recognize(canvas.toDataURL('image/png'));
+    const turn = await ipcRenderer.invoke('ocr:recognize', canvas.toDataURL('image/png'));
     // 기다리는 동안 자동이 꺼졌거나(수동 이동) 영역이 바뀌었으면 결과를 버린다
     if (!state.auto || gen !== autoGen) return;
-    const m = String(data.text || '').match(/\d{1,3}/);
-    if (m) {
+    if (turn !== null) {
       ocrMisses = 0;
-      applyRecognizedTurn(Number(m[0]));
+      applyRecognizedTurn(turn);
     } else {
       ocrMisses += 1;
       if (ocrMisses === 8) {
@@ -518,13 +504,9 @@ ipcRenderer.on('shortcuts:failed', (_e, combos) => {
   setOcrStatus(`⚠️ 단축키 사용 불가: ${combos.join(', ')} (다른 프로그램이 사용 중)`, 'err');
 });
 
-// 창을 닫을 때 캡처 스트림과 인식 워커를 정리한다
+// 창을 닫을 때 캡처 스트림을 정리한다 (인식 엔진은 메인이 종료할 때 같이 내린다)
 window.addEventListener('beforeunload', () => {
   stopCapture();
-  if (workerPromise) {
-    workerPromise.then((w) => w.terminate()).catch(() => {});
-    workerPromise = null;
-  }
 });
 
 loadBuilds({ firstRun: true });

@@ -298,19 +298,58 @@ ipcMain.handle('builds:pick-file', async () => {
   return loadBuilds();
 });
 
-/**
- * 인식 엔진이 언어 데이터를 받아 둘 자리.
- * 포장하면 앱 폴더가 읽기 전용(asar)이라, 쓸 수 있는 사용자 폴더를 내려준다.
- */
-ipcMain.handle('paths:ocr-cache', () => {
-  const dir = path.join(app.getPath('userData'), 'ocr-cache');
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (e) {
-    console.warn('[인식] 캐시 폴더를 못 만들었습니다:', e.message);
-  }
-  return dir;
+// ─────────────────────────────── 턴 인식 (메인 프로세스에서 돈다)
+//
+// tesseract는 Node 워커(worker_threads)를 만드는데 Electron 렌더러는 그걸 지원하지 않아
+// 렌더러에서 띄우면 "The V8 platform used by this instance of Node does not support
+// creating Workers"로 죽는다. 메인에서는 정상이라 여기서 돌리고 결과만 넘겨준다.
+// 캡처와 전처리는 캔버스가 필요하므로 그대로 렌더러에 남아 있다.
+
+let ocrWorkerPromise = null;
+
+function ensureOcrWorker() {
+  if (ocrWorkerPromise) return ocrWorkerPromise;
+  ocrWorkerPromise = (async () => {
+    const { createWorker } = require('tesseract.js');
+    // 언어 데이터는 한 번 받으면 여기 저장되어 다음부터는 오프라인으로 뜬다.
+    // 포장하면 앱 폴더가 읽기 전용(asar)이라 쓸 수 있는 사용자 폴더를 쓴다.
+    const cachePath = path.join(app.getPath('userData'), 'ocr-cache');
+    fs.mkdirSync(cachePath, { recursive: true });
+    const w = await createWorker('eng', 1, { cachePath });
+    await w.setParameters({
+      tessedit_char_whitelist: '0123456789',
+      tessedit_pageseg_mode: '7', // 한 줄
+    });
+    return w;
+  })().catch((e) => {
+    ocrWorkerPromise = null; // 실패하면 다음에 다시 시도할 수 있게
+    throw e;
+  });
+  return ocrWorkerPromise;
+}
+
+/** 자동을 켤 때 미리 띄워 둔다 — 첫 인식에서 1분씩 멈추지 않게 */
+ipcMain.handle('ocr:warmup', async () => {
+  await ensureOcrWorker();
+  return true;
 });
+
+/** @returns {Promise<number|null>} 읽어낸 턴 숫자, 못 읽으면 null */
+ipcMain.handle('ocr:recognize', async (_e, dataUrl) => {
+  const w = await ensureOcrWorker();
+  // 데이터 URL을 그대로 넘기면 tesseract가 경로로 오해할 수 있다 — 바이트로 바꿔 준다
+  const base64 = String(dataUrl).replace(/^data:image\/\w+;base64,/, '');
+  const { data } = await w.recognize(Buffer.from(base64, 'base64'));
+  const m = String(data.text || '').match(/\d{1,3}/);
+  return m ? Number(m[0]) : null;
+});
+
+function terminateOcrWorker() {
+  const pending = ocrWorkerPromise;
+  ocrWorkerPromise = null;
+  if (!pending) return;
+  pending.then((w) => w.terminate()).catch(() => {});
+}
 
 ipcMain.handle('config:get', () => loadConfig());
 ipcMain.handle('config:set', (_e, patch) => saveConfig(patch));
@@ -419,5 +458,8 @@ app.whenReady().then(() => {
   }
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  terminateOcrWorker();
+});
 app.on('window-all-closed', () => app.quit());
