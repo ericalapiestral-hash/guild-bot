@@ -3,6 +3,10 @@
 
 const { ipcRenderer } = require('electron');
 const { flatten, nextIndexForTurn, nextIndexAfterGap } = require('../lib/steps');
+const { toGray, loadTemplates, readTurn } = require('../lib/turnReader');
+
+/** 턴 숫자 전용 인식기의 대조표 — 범용 OCR보다 먼저 이걸 써 본다 */
+const TURN_TEMPLATES = loadTemplates(require('../lib/turnTemplates.json'));
 
 /** 이 횟수만큼 연속으로 못 읽으면 "연출/라운드 전환으로 잠깐 가려진 것"으로 본다 (약 2초) */
 const GAP_TICKS = 3;
@@ -345,35 +349,45 @@ function cropFrame() {
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
 
-  // 흑백 + 임계값 — 밝은 글자/어두운 글자 어느 쪽이든 살아남게 두 단계로
   const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  // 전용 인식기는 회색조만 있으면 되고 밝기 문턱값도 스스로 정한다 (Otsu)
+  const gray = toGray(img.data, canvas.width, canvas.height);
+
+  // 범용 OCR로 넘어갈 때를 대비해 canvas는 흑백으로 눌러 둔다 — tesseract는 검은 글자를 좋아한다
   const d = img.data;
   let sum = 0;
-  for (let i = 0; i < d.length; i += 4) {
-    const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-    d[i] = d[i + 1] = d[i + 2] = g;
-    sum += g;
-  }
-  const mean = sum / (d.length / 4);
-  const invert = mean > 128; // 배경이 밝으면 글자가 어두운 쪽
-  for (let i = 0; i < d.length; i += 4) {
-    let v = d[i];
+  for (let i = 0; i < gray.length; i += 1) sum += gray[i];
+  const invert = sum / gray.length > 128; // 배경이 밝으면 글자가 어두운 쪽
+  for (let i = 0, p = 0; p < gray.length; i += 4, p += 1) {
+    let v = gray[p];
     if (invert) v = 255 - v;
-    v = v > 96 ? 255 : 0; // 흰 글자 / 검은 배경으로 통일
-    d[i] = d[i + 1] = d[i + 2] = 255 - v; // tesseract는 검은 글자를 좋아한다
+    v = v > 96 ? 255 : 0;
+    d[i] = d[i + 1] = d[i + 2] = 255 - v;
   }
   ctx.putImageData(img, 0, 0);
-  return canvas;
+
+  return { canvas, gray, w: canvas.width, h: canvas.height };
 }
 
 async function ocrTick() {
   if (ocrBusy || !state.auto) return;
-  const canvas = cropFrame();
-  if (!canvas) return;
+  const frame = cropFrame();
+  if (!frame) return;
   ocrBusy = true;
   const gen = autoGen;
   try {
-    const turn = await ipcRenderer.invoke('ocr:recognize', canvas.toDataURL('image/png'));
+    // ① 턴 숫자 전용 인식기 — 여기서 끝나면 워커도 IPC도 안 탄다
+    const direct = readTurn(frame.gray, frame.w, frame.h, TURN_TEMPLATES);
+    if (direct) {
+      ocrMisses = 0;
+      state.everRead = true;
+      applyRecognizedTurn(direct.value);
+      return;
+    }
+
+    // ② 전용 인식기가 "모르겠다"고 하면 범용 OCR로 한 번 더 본다.
+    //    (게임 폰트가 대조표와 많이 다를 때를 위한 보험)
+    const turn = await ipcRenderer.invoke('ocr:recognize', frame.canvas.toDataURL('image/png'));
     // 기다리는 동안 자동이 꺼졌거나(수동 이동) 영역이 바뀌었으면 결과를 버린다
     if (!state.auto || gen !== autoGen) return;
     if (turn !== null) {
