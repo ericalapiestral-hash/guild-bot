@@ -148,6 +148,13 @@ TTS_BODY={"text":"{{text}}","format":"ogg_opus"}
     **상대경로로 되돌리지 말 것.** tesseract는 `asarUnpack`으로 빼 둬야 워커가 뜬다.
   - 윈도우에서 `npm run dist`가 winCodeSign 심볼릭 링크 오류로 멈추면, 그 캐시 폴더에
     macOS 부분을 뺀 채(`-xr'!darwin'`) 직접 풀어 두면 지나간다. 개발자 모드를 켜도 된다.
+  - 정리는 **`npm run clean`** (`-- --keep dist4` 처럼 하나만 남길 수 있다). 백신이 갓 만든
+    `app.asar`를 붙들고 있으면 `rm -rf`는 그 하나 때문에 통째로 실패한다 — 이 스크립트는
+    지울 수 있는 것부터 지우고 남은 것만 알려준다.
+- **턴 인식은 메인 프로세스에서 돈다.** `nodeIntegration`이 켜져 있어 tesseract가 Node 빌드를
+  고르는데, Electron 렌더러는 Node 워커(`worker_threads`)를 지원하지 않아 렌더러에서 띄우면
+  "does not support creating Workers"로 죽는다. 캡처·전처리만 렌더러(캔버스 필요)에 두고
+  인식은 `ocr:recognize` IPC로 넘긴다 — **렌더러로 되돌리지 말 것.**
 
 **안드로이드 (Kotlin)** — 자세한 건 [android/README.md](android/README.md)
 
