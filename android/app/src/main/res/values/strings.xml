@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">빌드 오버레이</string>
+
+    <string name="notif_channel">오버레이</string>
+    <string name="notif_title">빌드 오버레이 실행 중</string>
+    <string name="notif_stop">종료</string>
+
+    <string name="overlay_title">⚔️ 빌드</string>
+    <string name="turn_none">턴 —</string>
+
+    <string name="btn_prev">◀</string>
+    <string name="btn_next">▶</string>
+    <string name="btn_auto">자동</string>
+    <string name="btn_region">턴 위치</string>
+    <string name="btn_app">빌드</string>
+    <string name="btn_lock">🔒</string>
+    <string name="btn_unlock">🔓</string>
+    <string name="btn_collapse">▾</string>
+    <string name="btn_close">✕</string>
+
+    <string name="status_no_region">턴 위치 미지정</string>
+    <string name="status_region_set">턴 위치 지정됨 — 자동을 켜면 인식 시작</string>
+    <string name="status_auto_off">자동 꺼짐</string>
+    <string name="status_recognizing">인식 중…</string>
+    <string name="no_steps">이 빌드에는 스킬 순서가 없어요</string>
+
+    <string name="picker_hint">게임의 턴 숫자가 보이는 곳을 손가락으로 드래그하세요 (탭하면 취소)</string>
+</resources>

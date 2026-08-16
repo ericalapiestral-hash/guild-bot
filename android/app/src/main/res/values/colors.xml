@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="panel_bg">#F21B2130</color>
+    <color name="panel_line">#33FFFFFF</color>
+    <color name="text_main">#FFECF1FA</color>
+    <color name="text_dim">#FF8A94A6</color>
+    <color name="text_done">#FF5B6376</color>
+    <color name="accent">#FF7FCBFF</color>
+    <color name="accent_soft">#3355B8F0</color>
+    <color name="warn">#FFFF8A80</color>
+    <color name="chip_bg">#CC2A3346</color>
+    <color name="launcher_bg">#FF1B2130</color>
+</resources>

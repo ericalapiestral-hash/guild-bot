@@ -13,3 +13,12 @@ data/voice.json
 # 오버레이 앱
 overlay/node_modules/
 overlay/.cache/
+
+# 안드로이드 앱 (APK는 GitHub Actions에서 만든다)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/captures/
+*.apk
