@@ -20,7 +20,27 @@ npm start             # 봇 실행 (슬래시 명령은 시작할 때 자동 등
 npm test              # 파서·검색 자체 점검 (builds/notion/voice/tts)
 npm run notion:dump   # 노션에서 읽은 원본을 data/notion-dump.md로 저장
 npm run deploy        # 슬래시 명령 수동 등록 (보통 불필요)
+npm run release       # 배포용 exe·apk를 release/ 한 곳에 모은다
 ```
+
+## 배포 (release/)
+
+`npm run release` 하나만 돌리면 `release/`를 비우고 최신본으로 다시 채운다.
+**이름이 항상 같아서** 받아 둔 파일이 어느 버전인지 헷갈리지 않는다 —
+대신 `release/버전.txt`에 커밋 해시와 만든 시각을 적어 둔다.
+
+```
+release/
+  guild-overlay-pc.exe        ← 스크립트가 그 자리에서 빌드한다
+  guild-overlay-android.apk   ← CI에서 받아 둔 것을 찾아서 넣는다
+  버전.txt
+```
+
+- **APK는 로컬에서 못 만든다** (Android SDK가 없다). GitHub Actions에서 받아
+  다운로드 폴더나 `release-src/`에 두면 스크립트가 알아서 집어 온다.
+  경로를 직접 주려면 `npm run release -- --apk "경로"`.
+- exe는 그대로 두고 APK만 갈아끼우려면 `npm run release -- --skip-exe`.
+- `release/`는 커밋하지 않는다 (산출물).
 
 ## 기능 · 슬래시 명령
 

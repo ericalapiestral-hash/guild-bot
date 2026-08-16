@@ -16,6 +16,11 @@ overlay/.cache/
 overlay/dist*/
 *.exe
 
+# 배포용으로 모아 두는 곳 (npm run release가 만든다 — 산출물이라 커밋 안 함)
+release/
+release-src/
+*.apk
+
 # 안드로이드 앱 (APK는 GitHub Actions에서 만든다)
 android/.gradle/
 android/build/
